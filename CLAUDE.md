@@ -153,3 +153,104 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 - Do NOT delete tests without approval.
 
 </laravel-boost-guidelines>
+
+---
+
+# NewsScraper — Parámetros de trabajo del proyecto
+
+> Todo lo que está encima de esta línea lo regenera `php artisan boost:update` (bloque `<laravel-boost-guidelines>`). **Nunca edites ese bloque a mano.** Esta sección es el contexto propio del proyecto y sí se edita a mano.
+> `AGENTS.md` es una copia del bloque de Boost para otros agentes; si cambias algo aquí abajo que también deba verlo otro agente, replícalo allá manualmente.
+
+## 1. Contexto
+
+- **Producto:** NewsScraper — agente de coyuntura financiera. Recolecta noticias financieras de varias fuentes, las analiza con un LLM y publica **dos briefings diarios** (mañana y tarde) con los eventos económicos más relevantes.
+- **Curso:** IIP323W — Tecnologías y Aplicaciones Web y Móviles · Sección 1 · Semestre 2026-2 · Profesor Cristóbal Maturana Ahumada.
+- **Entrega:** Proyecto integrador de la Unidad 3 (Laravel), 4 semanas.
+- **Equipo:** Bruno Caro (AI Engineer) · Vicente Ramírez (Frontend) · Joaquín Parraud (Full-stack / backend).
+- **Referencia conceptual:** [Agentes_de_Coyuntura](https://github.com/DataMarketAnalysisClub/Agentes_de_Coyuntura).
+- **Fuente de verdad del alcance:** `NewScrapper-propuesta-laravel.pdf` y `PLAN.md`. Si una tarea contradice la propuesta, dilo antes de implementar.
+
+**Usuarios objetivo:** estudiante universitario de ingeniería/economía (perfil "Juan González", 21 años) y ejecutivo con poco tiempo (perfil "Federico Valdés"). Ambos quieren **leer poco y entender rápido**: el briefing debe ser escaneable en 2–3 minutos.
+
+## 2. Alcance del MVP (no ampliar sin pedirlo)
+
+1. Recolección automatizada de noticias desde fuentes configuradas (Diario Financiero, Bloomberg u otras accesibles), 2 veces al día.
+2. Análisis por LLM que devuelve **JSON estructurado**: resumen, categoría, nivel de relevancia, empresas mencionadas, personas mencionadas, etiquetas, explicación de la importancia económica.
+3. Clasificación, priorización y **agrupación de artículos que hablan del mismo acontecimiento** (deduplicación entre medios).
+4. Briefing AM/PM con: título, fuente(s), fecha y hora, resumen, categoría, relevancia, empresas y personas, explicación de importancia y enlace al original.
+5. Datos de mercado (Yahoo Finance) + gráficos como apoyo visual del briefing.
+
+**Fuera del MVP:** cuentas de usuario y personalización, notificaciones por correo/push, app móvil, búsqueda full-text avanzada, multi-idioma, panel de administración completo. Si algo de esto parece necesario, propónlo primero.
+
+## 3. Decisiones técnicas fijadas
+
+| Área | Decisión |
+|---|---|
+| Backend | Laravel 13 + PHP (composer pide `^8.3`; el entorno local es PHP 8.3.6, **no 8.5** — no uses sintaxis de 8.4/8.5) |
+| Base de datos | SQLite (`database/database.sqlite`) |
+| Scraping | [Roach PHP](https://roach-php.dev/docs/introduction) |
+| LLM | Ollama Cloud vía HTTP (`OLLAMA_API_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`) |
+| Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
+| Gráficos | [LaravelDaily/laravel-charts](https://github.com/LaravelDaily/laravel-charts) |
+| Frontend | Blade + Tailwind CSS 4 + Vite (sin SPA, sin framework JS) |
+| Colas / scheduling | `QUEUE_CONNECTION=database` + Laravel Scheduler |
+| Tests | Pest 5 |
+| Formato | Laravel Pint |
+
+**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. Driver por defecto: Ollama. Antes de la entrega hay que confirmar con el profesor cuál corre en la demo.
+
+## 4. Reglas de trabajo
+
+### Dependencias
+- Roach, yahoo-finance-api y laravel-charts **todavía no están instalados**. Instalarlos es parte del plan, pero **cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost).
+- No cambiar versiones de Laravel, PHP ni Pest.
+
+### Código
+- **Identificadores en inglés** (modelos, métodos, columnas, rutas): `Article`, `BriefingEdition`, `relevance_level`. **Texto visible en español** (Blade, mensajes de validación, seeders de categorías). Los prompts al LLM van en español y piden respuesta en español.
+- Un scraper por fuente, cada uno como Spider de Roach en `app/Spiders/`.
+- Toda llamada externa (scraping, LLM, Yahoo) ocurre **dentro de un Job en cola**, nunca en un request HTTP. Los controllers solo leen de la base de datos.
+- Los Jobs deben ser **idempotentes**: reprocesar el mismo artículo no debe duplicar filas (usar `updateOrCreate` sobre un hash de URL).
+- Enums PHP para valores cerrados: `NewsCategory`, `RelevanceLevel`, `BriefingEdition`, `EntityType`.
+- Zona horaria del dominio: `America/Santiago`. Guardar UTC, mostrar en horario de Chile.
+
+### Trato de la salida del LLM
+- El modelo **no es una fuente confiable**. Toda respuesta se valida contra un esquema antes de persistir; si no valida, se reintenta una vez y luego se marca el análisis como `failed` — nunca se guarda a medias.
+- Guardar siempre la **respuesta cruda** (`raw_response`) junto con el análisis parseado, para poder depurar alucinaciones.
+- La UI debe dejar claro que el resumen es generado por IA y siempre mostrar el **enlace a la publicación original**.
+
+### Scraping responsable (requisito, no opcional)
+- Respetar `robots.txt` y aplicar retardo entre requests (Roach: `$delay`), con User-Agent identificable.
+- **No almacenar ni republicar el texto completo con copyright.** Se guarda lo mínimo para analizar; lo que se publica es el resumen generado + metadatos + enlace.
+- Nunca eludir paywalls. Si una fuente bloquea o exige pago, se marca inactiva y se registra el fallo; no se buscan rodeos técnicos.
+- Los fallos de una fuente no pueden voltear el pipeline: cada fuente falla de forma aislada.
+
+### Seguridad y secretos
+- `.env` nunca se commitea. Las claves solo se leen vía `config()`, jamás `env()` fuera de `config/`.
+- Al agregar una variable nueva, actualizar `.env.example` con placeholder (sin espacios alrededor del `=`, ya nos pasó).
+
+### Tests
+- Pest, mayoría feature tests. `Http::fake()` para el LLM y Yahoo; fixtures HTML en `tests/Fixtures/` para los spiders. **Ningún test toca la red.**
+- Mínimo cubierto: parseo de la respuesta del LLM (incluyendo JSON inválido), deduplicación de artículos, selección y orden del briefing, y que las vistas principales rendericen.
+
+### Git
+- Rama `main`. Commits en español, imperativos, con prefijo (`feat:`, `fix:`, `chore:`).
+- Correr `vendor/bin/pint --dirty --format agent` antes de cerrar cualquier cambio en PHP.
+
+## 5. Glosario del dominio (usar estos nombres en el código)
+
+- **Source** — medio de origen (Diario Financiero, Bloomberg…).
+- **Article** — publicación individual scrapeada de una Source.
+- **Analysis** — salida estructurada del LLM para un Article.
+- **Event** — acontecimiento único; agrupa varios Articles de distintas Sources que hablan de lo mismo. Es la unidad que se muestra en el briefing.
+- **Briefing** — edición publicada (`morning` / `evening`) con los Events más relevantes del período.
+- **Entity** — empresa o persona mencionada en un Article.
+
+## 6. Comandos frecuentes
+
+```bash
+composer run setup     # instalación completa desde cero
+composer run dev       # server + queue + logs + vite
+composer run test      # tests
+vendor/bin/pint        # formato
+php artisan queue:work # procesar jobs del pipeline
+```

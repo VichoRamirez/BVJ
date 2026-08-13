@@ -2,9 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Support\DemoContent;
+use App\Models\Briefing;
 use Illuminate\View\View;
-use Symfony\Component\HttpFoundation\Response;
 
 class BriefingController extends Controller
 {
@@ -14,26 +13,24 @@ class BriefingController extends Controller
     public function index(): View
     {
         return view('briefings.index', [
-            'days' => DemoContent::briefings()
-                ->groupBy(fn (object $briefing): string => $briefing->published_on->toDateString()),
+            'days' => Briefing::query()
+                ->with('events')
+                ->orderByDesc('published_at')
+                ->get()
+                ->groupBy(fn (Briefing $briefing): string => $briefing->published_on->toDateString()),
         ]);
     }
 
     /**
-     * Una edición concreta. Con modelos reales esto será route model binding.
+     * Una edición concreta. El 404 lo da el route model binding.
      */
-    public function show(int $briefing): View
+    public function show(Briefing $briefing): View
     {
-        $edition = DemoContent::findBriefing($briefing);
-
-        abort_if($edition === null, Response::HTTP_NOT_FOUND);
+        $briefing->load(Briefing::DISPLAY_RELATIONS);
 
         return view('briefings.show', [
-            'briefing' => $edition,
-            'siblings' => DemoContent::briefings()
-                ->where('published_on', $edition->published_on)
-                ->sortBy('published_at')
-                ->values(),
+            'briefing' => $briefing,
+            'siblings' => Briefing::query()->sameDayAs($briefing)->get(),
         ]);
     }
 }

@@ -9,7 +9,7 @@ The Laravel Boost guidelines are specifically curated by Laravel maintainers for
 
 This application is a Laravel application and its main Laravel ecosystems package & versions are below. You are an expert with them all. Ensure you abide by these specific packages & versions.
 
-- php - 8.5
+- php - 8.4
 - laravel/framework (LARAVEL) - v13
 - laravel/prompts (PROMPTS) - v0
 - laravel/boost (BOOST) - v2
@@ -106,6 +106,13 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 
 - Laravel can be deployed using [Laravel Cloud](https://cloud.laravel.com/), which is the fastest way to deploy and scale production Laravel applications.
 
+=== tests rules ===
+
+# Test Enforcement
+
+- Every change must be programmatically tested. Write a new test or update an existing test, then run the affected tests to make sure they pass.
+- Run the minimum number of tests needed to ensure code quality and speed. Use `php artisan test --compact` with a specific filename or filter.
+
 === laravel/core rules ===
 
 # Do Things the Laravel Way
@@ -186,12 +193,12 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 
 | Área | Decisión |
 |---|---|
-| Backend | Laravel 13 + PHP (composer pide `^8.3`; el entorno local es PHP 8.3.6, **no 8.5** — no uses sintaxis de 8.4/8.5) |
+| Backend | Laravel 13 + **PHP 8.4 o superior**. `composer.json` dice `^8.3`, pero es letra muerta: el `composer.lock` resuelto trae `symfony/*` 8.1 (`php >=8.4.1`) y `pestphp/pest ^5` (`php ^8.4`, PHPUnit 13). **En PHP 8.3 el `composer install` falla.** |
 | Base de datos | SQLite (`database/database.sqlite`) |
-| Scraping | [Roach PHP](https://roach-php.dev/docs/introduction) |
+| Scraping | ⚠️ **Sin resolver.** [Roach PHP](https://roach-php.dev/docs/introduction) era la decisión, pero `roach-php/laravel` no soporta Laravel 13. Alternativas y criterio de decisión en `PLAN.md §3.1` |
 | LLM | Ollama Cloud vía HTTP (`OLLAMA_API_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`) |
 | Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
-| Gráficos | [LaravelDaily/laravel-charts](https://github.com/LaravelDaily/laravel-charts) |
+| Gráficos | SVG en línea con los tokens `--color-series-*` (`<x-sparkline>`). `laravel-charts` se descartó: última versión de 2023 y sin restricciones declaradas en su `composer.json` |
 | Frontend | Blade + Tailwind CSS 4 + Vite (sin SPA, sin framework JS) |
 | Colas / scheduling | `QUEUE_CONNECTION=database` + Laravel Scheduler |
 | Tests | Pest 5 |
@@ -202,7 +209,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 ## 4. Reglas de trabajo
 
 ### Dependencias
-- Roach, yahoo-finance-api y laravel-charts **todavía no están instalados**. Instalarlos es parte del plan, pero **cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost).
+- `scheb/yahoo-finance-api` está aprobado y pendiente de instalar (verificado compatible: `php >=8.1`, sin dependencia de framework). Roach quedó bloqueado (ver `PLAN.md §3.1`) y laravel-charts se descartó. **Cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost).
 - No cambiar versiones de Laravel, PHP ni Pest.
 
 ### Código

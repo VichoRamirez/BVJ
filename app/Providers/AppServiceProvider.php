@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\ServiceProvider;
@@ -27,5 +28,10 @@ class AppServiceProvider extends ServiceProvider
         Date::use(CarbonImmutable::class);
         Carbon::setLocale(config('app.locale'));
         CarbonImmutable::setLocale(config('app.locale'));
+
+        // Las vistas del briefing recorren briefing → events → articles → source.
+        // Si a un controller le falta un eager load, esto lo hace explotar en
+        // local y en los tests en vez de esconderlo como un N+1 silencioso.
+        Model::preventLazyLoading(! $this->app->isProduction());
     }
 }

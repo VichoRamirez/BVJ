@@ -11,7 +11,8 @@
     "require": {
         "php": "^8.3",
         "laravel/framework": "^13.8",
-        "laravel/tinker": "^3.0"
+        "laravel/tinker": "^3.0",
+        "scheb/yahoo-finance-api": "^5.2"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -40,8 +41,9 @@
         "setup": [
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
+            "@php -r \"file_exists('database/database.sqlite') || touch('database/database.sqlite');\"",
             "@php artisan key:generate",
-            "@php artisan migrate --force",
+            "@php artisan migrate --force --seed",
             "npm install --ignore-scripts",
             "npm run build"
         ],

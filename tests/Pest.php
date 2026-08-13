@@ -1,5 +1,7 @@
 <?php
 
+use Database\Seeders\DemoSeeder;
+use Database\Seeders\SourceSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -15,7 +17,7 @@ use Tests\TestCase;
 */
 
 pest()->extend(TestCase::class)
- // ->use(RefreshDatabase::class)
+    ->use(RefreshDatabase::class)
     ->in('Feature');
 
 /*
@@ -44,7 +46,13 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * Siembra las fuentes y el contenido de demostración.
+ *
+ * Se llama explícitamente en cada test y no en un beforeEach, para que los
+ * tests de estado vacío puedan correr contra una base realmente vacía.
+ */
+function seedDemo(): void
 {
-    // ..
+    test()->seed([SourceSeeder::class, DemoSeeder::class]);
 }

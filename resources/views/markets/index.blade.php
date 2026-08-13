@@ -8,12 +8,22 @@
                 Contexto numérico para leer el briefing. Los datos provienen de Yahoo Finance y se
                 capturan junto con cada corrida del pipeline.
             </p>
-            <p class="tabular text-xs text-muted">
-                Última captura: {{ $markets->first()->captured_at->translatedFormat('j \d\e F, H:i') }} h (Chile)
-            </p>
+            @if ($markets->isNotEmpty())
+                <p class="tabular text-xs text-muted">
+                    Última captura: {{ $markets->first()->captured_at->translatedFormat('j \d\e F, H:i') }} h (Chile)
+                </p>
+            @endif
         </div>
 
         <x-rule />
+
+        @if ($markets->isEmpty())
+            <div class="py-8">
+                <x-empty-state title="Todavía no hay datos de mercado" icon="layers">
+                    La próxima corrida del pipeline captura los precios de los instrumentos seguidos.
+                </x-empty-state>
+            </div>
+        @else
 
         <div class="overflow-x-auto py-8">
             <table class="w-full min-w-[40rem] text-left">
@@ -54,10 +64,11 @@
         </div>
 
         <p class="max-w-[62ch] pb-10 text-xs text-muted">
-            Los gráficos son un marcador de posición mientras se integra
-            <span class="font-semibold">laravel-charts</span>. Los colores de serie ya salen de los
-            tokens del sistema, de modo que el reemplazo no cambie la paleta.
+            Los gráficos son SVG en línea, dibujados con los tokens de serie del sistema de diseño.
+            No dependen de JavaScript ni de una librería externa.
         </p>
+
+        @endif
 
     </div>
 </x-layouts.app>

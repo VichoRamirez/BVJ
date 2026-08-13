@@ -1,192 +1,240 @@
 <?php
 
-namespace App\Support;
+namespace Database\Seeders;
 
 use App\Enums\AnalysisStatus;
 use App\Enums\BriefingEdition;
 use App\Enums\EntityType;
 use App\Enums\NewsCategory;
 use App\Enums\RelevanceLevel;
+use App\Models\Analysis;
+use App\Models\Article;
+use App\Models\Briefing;
+use App\Models\Entity;
+use App\Models\Event;
+use App\Models\MarketSnapshot;
+use App\Models\Source;
+use App\Models\Tag;
+use App\Support\CanonicalUrl;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Seeder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
- * Contenido de demostración para levantar el frontend antes de que exista el
- * pipeline. Devuelve objetos con la misma forma que tendrán los modelos Eloquent
- * (`Briefing`, `Event`, `Article`, `Source`, `Entity`), de modo que las vistas no
- * cambien cuando se conecte la base de datos: solo cambia quién provee los datos.
+ * Contenido de demostración: briefings realistas ya generados, para poder
+ * mostrar el producto sin depender de que el scraping y el LLM respondan.
  *
- * ELIMINAR cuando existan los modelos reales (ver PLAN.md §3.2).
+ * Es el Plan B obligatorio de PLAN.md §5 y, mientras el pipeline no exista, es
+ * también lo que llena las vistas. Todas las fechas son relativas a hoy en
+ * horario de Chile, así que la demo siempre se ve recién publicada.
  *
- * @phpstan-type EventShape object{slug:string,title:string,category:NewsCategory,relevance:RelevanceLevel,summary:string,importance:string,first_seen_at:CarbonImmutable,entities:Collection,tags:array<int,string>,articles:Collection,analysis_status:AnalysisStatus}
+ * Es idempotente: se puede volver a correr sin duplicar nada.
  */
-final class DemoContent
+class DemoSeeder extends Seeder
 {
-    /**
-     * Todos los briefings publicados, del más reciente al más antiguo.
-     *
-     * @return Collection<int, object>
-     */
-    public static function briefings(): Collection
+    public function run(): void
     {
-        return once(function (): Collection {
-            $events = self::events()->keyBy('slug');
-            $today = CarbonImmutable::now('America/Santiago')->startOfDay();
+        DB::transaction(function (): void {
+            $sources = Source::query()->get()->keyBy('slug');
 
-            $plan = [
-                ['days' => 0, 'edition' => BriefingEdition::Evening, 'events' => ['banco-central-mantiene-tpm', 'ipsa-cierra-en-maximo-historico', 'codelco-sqm-litio', 'latam-resultados-trimestre', 'peso-chileno-presion', 'datacenters-ia-chile']],
-                ['days' => 0, 'edition' => BriefingEdition::Morning, 'events' => ['cobre-supera-los-cinco-dolares', 'banco-central-mantiene-tpm', 'imacec-sorprende-al-alza', 'fed-senala-recorte', 'reforma-pensiones-comision', 'cencosud-plan-expansion', 'salmon-exportaciones-record']],
-                ['days' => 1, 'edition' => BriefingEdition::Evening, 'events' => ['imacec-sorprende-al-alza', 'falabella-refinancia-deuda', 'ipsa-cierra-en-maximo-historico', 'peso-chileno-presion', 'salmon-exportaciones-record']],
-                ['days' => 1, 'edition' => BriefingEdition::Morning, 'events' => ['fed-senala-recorte', 'cobre-supera-los-cinco-dolares', 'reforma-pensiones-comision', 'datacenters-ia-chile']],
-                ['days' => 2, 'edition' => BriefingEdition::Evening, 'events' => ['codelco-sqm-litio', 'cencosud-plan-expansion', 'latam-resultados-trimestre', 'falabella-refinancia-deuda']],
-            ];
+            if ($sources->isEmpty()) {
+                $this->call(SourceSeeder::class);
+                $sources = Source::query()->get()->keyBy('slug');
+            }
 
-            return collect($plan)->map(function (array $row, int $index) use ($events, $today): object {
-                $day = $today->subDays($row['days']);
-                $publishedAt = $day->setTime($row['edition']->scheduledHour(), 0);
+            $events = $this->seedEvents($sources);
 
-                return (object) [
-                    'id' => $index + 1,
-                    'edition' => $row['edition'],
-                    'published_on' => $day,
-                    'published_at' => $publishedAt,
-                    'events' => collect($row['events'])
-                        ->map(fn (string $slug): object => $events->get($slug))
-                        ->filter()
-                        ->values(),
-                ];
-            })->values();
+            $this->seedBriefings($events);
+            $this->seedMarketSnapshots();
         });
     }
 
     /**
-     * El briefing más reciente, o null si todavía no se ha publicado ninguno.
+     * @param  Collection<string, Source>  $sources
+     * @return Collection<string, Event>
      */
-    public static function latestBriefing(): ?object
+    private function seedEvents(Collection $sources): Collection
     {
-        return self::briefings()->first();
-    }
+        $now = CarbonImmutable::now(config('newsscraper.briefing.timezone'));
 
-    public static function findBriefing(int $id): ?object
-    {
-        return self::briefings()->firstWhere('id', $id);
+        return collect($this->eventDefinitions())
+            ->mapWithKeys(function (array $definition) use ($sources, $now): array {
+                $firstSeen = $now->subHours($definition['hours_ago']);
+
+                $distinctSources = collect($definition['articles'])
+                    ->pluck('source')
+                    ->unique()
+                    ->count();
+
+                $event = Event::updateOrCreate(
+                    ['slug' => $definition['slug']],
+                    [
+                        'title' => $definition['title'],
+                        'summary' => $definition['summary'],
+                        'importance' => $definition['importance'],
+                        'category' => $definition['category'],
+                        'relevance' => $definition['relevance'],
+                        'relevance_score' => Event::scoreFor($definition['relevance'], $distinctSources),
+                        'tags' => $definition['tags'],
+                        'first_seen_at' => $firstSeen,
+                        'articles_count' => count($definition['articles']),
+                    ],
+                );
+
+                $entityIds = collect($definition['entities'])
+                    ->map(fn (array $entity): int => Entity::firstOrCreateFor($entity[0], $entity[1])->id)
+                    ->all();
+
+                $tagIds = collect($definition['tags'])
+                    ->map(fn (string $tag): int => Tag::firstOrCreateFor($tag)->id)
+                    ->all();
+
+                $event->entities()->sync($entityIds);
+
+                foreach ($definition['articles'] as $index => $article) {
+                    $this->seedArticle($event, $sources->get($article['source']), $article, $firstSeen->addMinutes($index * 37), $entityIds, $tagIds);
+                }
+
+                return [$definition['slug'] => $event];
+            });
     }
 
     /**
-     * Todos los eventos conocidos, ordenados por relevancia y luego por fecha.
-     *
-     * @return Collection<int, object>
+     * @param  array{title: string, url: string, author: string, source: string}  $definition
+     * @param  list<int>  $entityIds
+     * @param  list<int>  $tagIds
      */
-    public static function events(): Collection
-    {
-        return once(fn (): Collection => collect(self::eventDefinitions())
-            ->map(self::hydrateEvent(...))
-            ->sort(fn (object $a, object $b): int => [$b->relevance->weight(), $b->first_seen_at->timestamp]
-                <=> [$a->relevance->weight(), $a->first_seen_at->timestamp])
-            ->values());
-    }
+    private function seedArticle(
+        Event $event,
+        Source $source,
+        array $definition,
+        CarbonImmutable $publishedAt,
+        array $entityIds,
+        array $tagIds,
+    ): void {
+        $article = Article::updateOrCreate(
+            ['url_hash' => CanonicalUrl::hash($definition['url'])],
+            [
+                'source_id' => $source->id,
+                'event_id' => $event->id,
+                'url' => $definition['url'],
+                'title' => $definition['title'],
+                'author' => $definition['author'],
+                'published_at' => $publishedAt,
+                'excerpt' => str($event->summary)->limit(180)->toString(),
+                'content' => $event->summary,
+                'scraped_at' => $publishedAt->addMinutes(5),
+                'analysis_status' => AnalysisStatus::Completed,
+            ],
+        );
 
-    public static function findEvent(string $slug): ?object
-    {
-        return self::events()->firstWhere('slug', $slug);
+        $article->entities()->sync($entityIds);
+        $article->tags()->sync($tagIds);
+
+        Analysis::updateOrCreate(
+            ['article_id' => $article->id],
+            [
+                'provider' => 'ollama',
+                'model' => 'gpt-oss:20b-cloud',
+                'schema_version' => '1.0',
+                'summary' => $event->summary,
+                'category' => $event->category,
+                'relevance' => $event->relevance,
+                'importance_explanation' => $event->importance,
+                'raw_response' => [
+                    'resumen' => $event->summary,
+                    'categoria' => $event->category->value,
+                    'relevancia' => $event->relevance->value,
+                    'importancia_economica' => $event->importance,
+                    'etiquetas' => $event->tags,
+                    '_nota' => 'Respuesta de demostración, no proviene de una llamada real al modelo.',
+                ],
+                'analyzed_at' => $publishedAt->addMinutes(12),
+            ],
+        );
     }
 
     /**
-     * @return Collection<int, object>
+     * @param  Collection<string, Event>  $events
      */
-    public static function eventsByCategory(NewsCategory $category): Collection
+    private function seedBriefings(Collection $events): void
     {
-        return self::events()->where('category', $category)->values();
-    }
+        $today = CarbonImmutable::now(config('newsscraper.briefing.timezone'))->startOfDay();
 
-    /**
-     * Cuántos eventos hay por categoría, para la navegación lateral.
-     *
-     * @return Collection<string, int>
-     */
-    public static function categoryCounts(): Collection
-    {
-        return self::events()
-            ->groupBy(fn (object $event): string => $event->category->value)
-            ->map->count();
-    }
-
-    /**
-     * Instrumentos seguidos para el panel de mercado (equivalente a
-     * `market_snapshots` una vez conectado Yahoo Finance).
-     *
-     * @return Collection<int, object>
-     */
-    public static function markets(): Collection
-    {
-        return once(fn (): Collection => collect([
-            ['symbol' => '^IPSA', 'name' => 'IPSA', 'detail' => 'Bolsa de Santiago', 'unit' => 'pts', 'price' => 6842.31, 'change_percent' => 1.24, 'history' => [6612, 6588, 6640, 6701, 6688, 6733, 6760, 6742, 6798, 6842]],
-            ['symbol' => 'CLP=X', 'name' => 'USD / CLP', 'detail' => 'Dólar observado', 'unit' => '$', 'price' => 942.60, 'change_percent' => -0.42, 'history' => [961, 958, 954, 957, 949, 946, 950, 947, 946, 942]],
-            ['symbol' => 'HG=F', 'name' => 'Cobre', 'detail' => 'COMEX, US$/lb', 'unit' => 'US$', 'price' => 5.12, 'change_percent' => 2.87, 'history' => [4.62, 4.68, 4.71, 4.79, 4.83, 4.88, 4.94, 4.97, 5.02, 5.12]],
-            ['symbol' => 'BZ=F', 'name' => 'Brent', 'detail' => 'Crudo, US$/bbl', 'unit' => 'US$', 'price' => 78.44, 'change_percent' => -1.06, 'history' => [82.1, 81.4, 80.9, 81.2, 80.1, 79.6, 79.9, 79.2, 79.3, 78.4]],
-            ['symbol' => '^GSPC', 'name' => 'S&P 500', 'detail' => 'Estados Unidos', 'unit' => 'pts', 'price' => 5638.19, 'change_percent' => 0.61, 'history' => [5498, 5512, 5487, 5533, 5561, 5548, 5580, 5602, 5604, 5638]],
-            ['symbol' => 'BTC-USD', 'name' => 'Bitcoin', 'detail' => 'US$', 'unit' => 'US$', 'price' => 68120.00, 'change_percent' => -3.18, 'history' => [72400, 71800, 72100, 70900, 71200, 70400, 69800, 70100, 69300, 68120]],
-        ])->map(function (array $row): object {
-            return (object) [
-                ...$row,
-                'captured_at' => CarbonImmutable::now('America/Santiago')->subMinutes(12),
-            ];
-        }));
-    }
-
-    /**
-     * Fuentes configuradas y su estado de la última corrida. Alimenta el aviso de
-     * "una fuente falló" sin voltear el resto de la página.
-     *
-     * @return Collection<int, object>
-     */
-    public static function sources(): Collection
-    {
-        return once(fn (): Collection => collect([
-            ['name' => 'Diario Financiero', 'slug' => 'diario-financiero', 'is_active' => true, 'failure_count' => 0],
-            ['name' => 'Bloomberg Línea', 'slug' => 'bloomberg-linea', 'is_active' => true, 'failure_count' => 0],
-            ['name' => 'Pulso · La Tercera', 'slug' => 'pulso', 'is_active' => true, 'failure_count' => 0],
-            ['name' => 'El Mercurio Inversiones', 'slug' => 'mercurio-inversiones', 'is_active' => true, 'failure_count' => 1],
-            ['name' => 'Reuters', 'slug' => 'reuters', 'is_active' => false, 'failure_count' => 3],
-        ])->map(fn (array $row): object => (object) $row));
-    }
-
-    private static function hydrateEvent(array $definition): object
-    {
-        $sources = self::sources()->keyBy('slug');
-        $firstSeen = CarbonImmutable::now('America/Santiago')->subHours($definition['hours_ago']);
-
-        $articles = collect($definition['articles'])->map(fn (array $article, int $index): object => (object) [
-            'title' => $article['title'],
-            'url' => $article['url'],
-            'author' => $article['author'],
-            'source' => $sources->get($article['source']),
-            'published_at' => $firstSeen->addMinutes($index * 37),
-            'analysis_status' => AnalysisStatus::Completed,
-        ]);
-
-        return (object) [
-            'slug' => $definition['slug'],
-            'title' => $definition['title'],
-            'category' => $definition['category'],
-            'relevance' => $definition['relevance'],
-            'summary' => $definition['summary'],
-            'importance' => $definition['importance'],
-            'first_seen_at' => $firstSeen,
-            'entities' => collect($definition['entities'])->map(fn (array $entity): object => (object) [
-                'type' => $entity[0],
-                'name' => $entity[1],
-            ]),
-            'tags' => $definition['tags'],
-            'articles' => $articles,
-            'analysis_status' => $definition['analysis_status'] ?? AnalysisStatus::Completed,
+        $plan = [
+            ['days' => 0, 'edition' => BriefingEdition::Evening, 'events' => ['banco-central-mantiene-tpm', 'ipsa-cierra-en-maximo-historico', 'codelco-sqm-litio', 'latam-resultados-trimestre', 'peso-chileno-presion', 'datacenters-ia-chile']],
+            ['days' => 0, 'edition' => BriefingEdition::Morning, 'events' => ['cobre-supera-los-cinco-dolares', 'banco-central-mantiene-tpm', 'imacec-sorprende-al-alza', 'fed-senala-recorte', 'reforma-pensiones-comision', 'cencosud-plan-expansion', 'salmon-exportaciones-record']],
+            ['days' => 1, 'edition' => BriefingEdition::Evening, 'events' => ['imacec-sorprende-al-alza', 'falabella-refinancia-deuda', 'ipsa-cierra-en-maximo-historico', 'peso-chileno-presion', 'salmon-exportaciones-record']],
+            ['days' => 1, 'edition' => BriefingEdition::Morning, 'events' => ['fed-senala-recorte', 'cobre-supera-los-cinco-dolares', 'reforma-pensiones-comision', 'datacenters-ia-chile']],
+            ['days' => 2, 'edition' => BriefingEdition::Evening, 'events' => ['codelco-sqm-litio', 'cencosud-plan-expansion', 'latam-resultados-trimestre', 'falabella-refinancia-deuda']],
         ];
+
+        foreach ($plan as $row) {
+            $day = $today->subDays($row['days']);
+
+            // El Carbon se bindea con el mismo formato con que lo escribe el
+            // cast `date`, así que la búsqueda encuentra la fila y el seeder
+            // sigue siendo idempotente.
+            $briefing = Briefing::updateOrCreate(
+                ['published_on' => $day, 'edition' => $row['edition']],
+                ['published_at' => $day->setTime($row['edition']->scheduledHour(), 0)],
+            );
+
+            $briefing->events()->sync(
+                collect($row['events'])
+                    ->map(fn (string $slug): ?Event => $events->get($slug))
+                    ->filter()
+                    ->values()
+                    ->mapWithKeys(fn (Event $event, int $index): array => [
+                        $event->id => ['position' => $index + 1],
+                    ])
+                    ->all()
+            );
+        }
+    }
+
+    private function seedMarketSnapshots(): void
+    {
+        $capturedAt = CarbonImmutable::now(config('newsscraper.briefing.timezone'))->subMinutes(12);
+
+        $markets = [
+            ['symbol' => '^IPSA', 'price' => 6842.31, 'change_percent' => 1.24, 'history' => [6612, 6588, 6640, 6701, 6688, 6733, 6760, 6742, 6798, 6842]],
+            ['symbol' => 'CLP=X', 'price' => 942.60, 'change_percent' => -0.42, 'history' => [961, 958, 954, 957, 949, 946, 950, 947, 946, 942]],
+            ['symbol' => 'HG=F', 'price' => 5.12, 'change_percent' => 2.87, 'history' => [4.62, 4.68, 4.71, 4.79, 4.83, 4.88, 4.94, 4.97, 5.02, 5.12]],
+            ['symbol' => 'BZ=F', 'price' => 78.44, 'change_percent' => -1.06, 'history' => [82.1, 81.4, 80.9, 81.2, 80.1, 79.6, 79.9, 79.2, 79.3, 78.4]],
+            ['symbol' => '^GSPC', 'price' => 5638.19, 'change_percent' => 0.61, 'history' => [5498, 5512, 5487, 5533, 5561, 5548, 5580, 5602, 5604, 5638]],
+            ['symbol' => 'BTC-USD', 'price' => 68120.00, 'change_percent' => -3.18, 'history' => [72400, 71800, 72100, 70900, 71200, 70400, 69800, 70100, 69300, 68120]],
+        ];
+
+        /** @var list<array{symbol: string, name: string, detail: string, unit: string}> $instruments */
+        $instruments = config('newsscraper.markets.instruments');
+        $metadata = collect($instruments)->keyBy('symbol');
+
+        foreach ($markets as $index => $market) {
+            // La clave es solo el símbolo: la tabla admite histórico real
+            // (unique por símbolo y momento), pero la demo debe quedarse en una
+            // captura por instrumento por más veces que se corra el seeder.
+            MarketSnapshot::updateOrCreate(
+                ['symbol' => $market['symbol']],
+                [
+                    'captured_at' => $capturedAt,
+                    ...$metadata->get($market['symbol'], ['name' => $market['symbol']]),
+                    'price' => $market['price'],
+                    'change_percent' => $market['change_percent'],
+                    'history' => $market['history'],
+                    'sort_order' => $index,
+                ],
+            );
+        }
     }
 
     /**
-     * @return array<int, array<string, mixed>>
+     * Los trece acontecimientos de la demo.
+     *
+     * @return list<array{slug: string, title: string, category: NewsCategory, relevance: RelevanceLevel, hours_ago: int, summary: string, importance: string, entities: list<array{0: EntityType, 1: string}>, tags: list<string>, articles: list<array{title: string, url: string, author: string, source: string}>}>
      */
-    private static function eventDefinitions(): array
+    private function eventDefinitions(): array
     {
         return [
             [

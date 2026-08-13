@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c92e85533ca569de2b10e4d84b0de20d",
+    "content-hash": "5150d539710f179d3ed3b36870e7dc4c",
     "packages": [
         {
             "name": "brick/math",
@@ -2618,6 +2618,55 @@
             "time": "2025-12-27T19:41:33+00:00"
         },
         {
+            "name": "psr/cache",
+            "version": "3.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/php-fig/cache.git",
+                "reference": "aa5030cfa5405eccfdcb1083ce040c2cb8d253bf"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/php-fig/cache/zipball/aa5030cfa5405eccfdcb1083ce040c2cb8d253bf",
+                "reference": "aa5030cfa5405eccfdcb1083ce040c2cb8d253bf",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=8.0.0"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-master": "1.0.x-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Psr\\Cache\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "PHP-FIG",
+                    "homepage": "https://www.php-fig.org/"
+                }
+            ],
+            "description": "Common interface for caching libraries",
+            "keywords": [
+                "cache",
+                "psr",
+                "psr-6"
+            ],
+            "support": {
+                "source": "https://github.com/php-fig/cache/tree/3.0.0"
+            },
+            "time": "2021-02-03T23:26:27+00:00"
+        },
+        {
             "name": "psr/clock",
             "version": "1.0.0",
             "source": {
@@ -3305,6 +3354,63 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.9.3"
             },
             "time": "2026-06-18T03:57:49+00:00"
+        },
+        {
+            "name": "scheb/yahoo-finance-api",
+            "version": "v5.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/scheb/yahoo-finance-api.git",
+                "reference": "c563ffa144a68356575929adc1d99948a51f0e9a"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/scheb/yahoo-finance-api/zipball/c563ffa144a68356575929adc1d99948a51f0e9a",
+                "reference": "c563ffa144a68356575929adc1d99948a51f0e9a",
+                "shasum": ""
+            },
+            "require": {
+                "ext-json": "*",
+                "guzzlehttp/guzzle": "^7",
+                "php": ">=8.1",
+                "psr/cache": "^2|^3"
+            },
+            "require-dev": {
+                "escapestudios/symfony2-coding-standard": "^3.9",
+                "phpunit/phpunit": "^10.5|^11|^12",
+                "squizlabs/php_codesniffer": "^3.5",
+                "symfony/cache": "^6|^7",
+                "vimeo/psalm": "^6.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Scheb\\YahooFinanceApi\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Christian Scheb",
+                    "email": "me@christianscheb.de"
+                }
+            ],
+            "description": "PHP library for accessing Yahoo Finance data",
+            "homepage": "https://github.com/scheb/yahoo-finance-api",
+            "keywords": [
+                "api",
+                "finance",
+                "stock",
+                "yahoo"
+            ],
+            "support": {
+                "issues": "https://github.com/scheb/yahoo-finance-api/issues",
+                "source": "https://github.com/scheb/yahoo-finance-api/tree/v5.2.0"
+            },
+            "time": "2026-07-10T18:22:35+00:00"
         },
         {
             "name": "symfony/clock",
@@ -9894,5 +10000,5 @@
         "php": "^8.3"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.6.0"
+    "plugin-api-version": "2.9.0"
 }

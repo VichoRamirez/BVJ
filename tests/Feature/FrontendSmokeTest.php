@@ -1,15 +1,19 @@
 <?php
 
 use App\Enums\NewsCategory;
-use App\Support\DemoContent;
+use App\Models\Briefing;
+use App\Models\Event;
 
 /*
- * Smoke de las seis rutas del frontend contra los datos de demostración.
- * Ninguna toca la red ni la base de datos. Cuando entren los modelos reales,
- * estos tests se reapuntan a factories sin cambiar las aserciones.
+ * Smoke de las seis rutas del frontend contra la base de datos sembrada.
+ * Ninguna toca la red. Con Model::preventLazyLoading() activo, estos tests son
+ * además el detector de N+1: si a un controller le falta un eager load,
+ * explotan con LazyLoadingViolationException.
  */
 
 it('renderiza las rutas principales', function (string $url) {
+    seedDemo();
+
     $this->get($url)
         ->assertSuccessful()
         ->assertSee('NewsScraper', escape: false);
@@ -20,7 +24,9 @@ it('renderiza las rutas principales', function (string $url) {
 ]);
 
 it('muestra el último briefing en la portada', function () {
-    $briefing = DemoContent::latestBriefing();
+    seedDemo();
+
+    $briefing = Briefing::query()->with('events')->latest('published_at')->first();
 
     $this->get('/')
         ->assertSuccessful()
@@ -29,14 +35,24 @@ it('muestra el último briefing en la portada', function () {
         ->assertSee('Los resúmenes de esta página los genera un modelo de lenguaje');
 });
 
-it('muestra el estado vacío cuando no hay briefing', function () {
+it('muestra el estado vacío cuando no hay ningún briefing publicado', function () {
+    $this->get('/')
+        ->assertSuccessful()
+        ->assertSee('Todavía no hay briefing publicado');
+});
+
+it('permite forzar el estado vacío con ?vacio=1', function () {
+    seedDemo();
+
     $this->get('/?vacio=1')
         ->assertSuccessful()
         ->assertSee('Todavía no hay briefing publicado');
 });
 
 it('abre una edición concreta', function () {
-    $briefing = DemoContent::briefings()->last();
+    seedDemo();
+
+    $briefing = Briefing::query()->with('events')->orderBy('published_at')->first();
 
     $this->get("/briefings/{$briefing->id}")
         ->assertSuccessful()
@@ -48,7 +64,9 @@ it('devuelve 404 para una edición inexistente', function () {
 });
 
 it('muestra el detalle de un acontecimiento con sus fuentes y el enlace original', function () {
-    $event = DemoContent::events()->first();
+    seedDemo();
+
+    $event = Event::query()->with('articles.source')->mostRelevant()->first();
     $article = $event->articles->first();
 
     $this->get("/eventos/{$event->slug}")
@@ -64,11 +82,17 @@ it('devuelve 404 para un acontecimiento inexistente', function () {
 });
 
 it('filtra acontecimientos por categoría', function () {
+    seedDemo();
+
     $category = NewsCategory::Monetary;
 
     $response = $this->get("/categorias/{$category->value}")->assertSuccessful();
 
-    foreach (DemoContent::eventsByCategory($category) as $event) {
+    $events = Event::query()->where('category', $category)->get();
+
+    expect($events)->not->toBeEmpty();
+
+    foreach ($events as $event) {
         $response->assertSee($event->title);
     }
 });
@@ -78,9 +102,17 @@ it('devuelve 404 para una categoría desconocida', function () {
 });
 
 it('lista los instrumentos de mercado con su variación', function () {
+    seedDemo();
+
     $this->get('/mercados')
         ->assertSuccessful()
         ->assertSee('IPSA')
         ->assertSee('USD / CLP', escape: false)
         ->assertSee('Cobre');
+});
+
+it('muestra el estado vacío de mercados cuando no hay capturas', function () {
+    $this->get('/mercados')
+        ->assertSuccessful()
+        ->assertSee('Todavía no hay datos de mercado');
 });

@@ -4,13 +4,13 @@ Agente de coyuntura (scraper + análisis de noticias) construido en Laravel. El 
 
 Inspirado en [Agentes_de_Coyuntura](https://github.com/DataMarketAnalysisClub/Agentes_de_Coyuntura) de DataMarketAnalysisClub.
 
-> Proyecto en curso. El frontend (rutas, vistas Blade y sistema de diseño) está implementado
-> sobre datos de demostración. El scraping, el análisis por LLM y el pipeline de briefings
-> todavía no están implementados — ver `PLAN.md`.
+> Proyecto en curso. El frontend (rutas, vistas Blade y sistema de diseño) y el modelo de datos
+> completo están implementados: las seis rutas leen de la base de datos. El scraping, el análisis
+> por LLM y el pipeline de briefings todavía no están implementados — ver `PLAN.md`.
 
 ## Stack
 
-- PHP 8.5 / Laravel 13
+- PHP 8.4+ / Laravel 13
 - Pest 5 (testing)
 - Tailwind CSS 4 + Vite
 - Ollama (LLM para el análisis de coyuntura)
@@ -18,7 +18,8 @@ Inspirado en [Agentes_de_Coyuntura](https://github.com/DataMarketAnalysisClub/Ag
 
 ## Requisitos
 
-- PHP >= 8.3
+- **PHP >= 8.4.** El `composer.json` dice `^8.3` por herencia del esqueleto, pero el `composer.lock`
+  trae Symfony 8.1 (`php >=8.4.1`) y Pest 5 (`php ^8.4`): en PHP 8.3 el `composer install` falla.
 - Composer
 - Node.js + npm
 - Acceso a una API de Ollama (local o [ollama.com](https://ollama.com))
@@ -36,8 +37,12 @@ Copia el archivo de entorno y genera la clave de la aplicación:
 cp .env.example .env
 php artisan key:generate
 touch database/database.sqlite
-php artisan migrate
+php artisan migrate --seed
 ```
+
+El `--seed` carga las fuentes del MVP y el contenido de demostración (`DemoSeeder`): 13
+acontecimientos, 5 ediciones y 6 instrumentos de mercado, con fechas relativas a hoy. Es
+idempotente, se puede volver a correr sin duplicar nada.
 
 Alternativamente, `composer run setup` ejecuta estos pasos automáticamente.
 
@@ -84,9 +89,8 @@ tail -f storage/logs/laravel.log
 
 ## Rutas
 
-El frontend está implementado con datos de demostración (`app/Support/DemoContent.php`)
-mientras no exista el pipeline. Los controladores solo leen; ninguna vista hace llamadas
-externas.
+Los controladores leen de la base de datos con eager loading; ninguna vista hace llamadas
+externas. Mientras no exista el pipeline, los datos los pone `DemoSeeder`.
 
 | Ruta | Nombre | Contenido |
 |---|---|---|

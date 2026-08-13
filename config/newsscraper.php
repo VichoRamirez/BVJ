@@ -81,6 +81,8 @@ return [
         'window_hours' => (int) env('NEWS_CLUSTER_WINDOW', 24),
         'title_similarity' => (float) env('NEWS_CLUSTER_THRESHOLD', 0.62),
         'shared_entities_minimum' => 2,
+        'max_articles' => (int) env('NEWS_CLUSTER_MAX_ARTICLES', 500),
+        'job_timeout' => (int) env('NEWS_CLUSTER_JOB_TIMEOUT', 120),
     ],
 
     /*

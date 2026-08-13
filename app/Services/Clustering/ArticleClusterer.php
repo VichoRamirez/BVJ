@@ -114,7 +114,7 @@ final class ArticleClusterer
             $latest = max(array_map(static fn (ClusterableArticleData $member): \DateTimeImmutable => $member->publishedAt, $members));
             $maxRelevance = array_reduce($members, static fn ($max, ClusterableArticleData $member) => $max === null || $member->relevance->weight() > $max->weight() ? $member->relevance : $max);
 
-            return new ArticleCluster($members, $members[0]->category, $representative->title, count(array_unique(array_map(static fn (ClusterableArticleData $member): string => $member->sourceKey, $members))), $maxRelevance, $latest, $canonicalEntities, $sharedEntities);
+            return new ArticleCluster($members, $members[0]->category, $representative->title, count(array_unique(array_map(static fn (ClusterableArticleData $member): string => $member->sourceKey, $members))), $maxRelevance, $latest, $canonicalEntities, $sharedEntities, $representative->id);
         }, array_values($components));
         usort($clusters, static fn (ArticleCluster $left, ArticleCluster $right): int => strcmp($left->members[0]->id, $right->members[0]->id));
 

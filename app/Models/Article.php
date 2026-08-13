@@ -30,6 +30,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'content',
     'scraped_at',
     'analysis_status',
+    'analysis_attempts',
+    'analysis_error',
+    'analysis_started_at',
+    'analysis_completed_at',
+    'analysis_run_id',
 ])]
 class Article extends Model
 {
@@ -52,6 +57,8 @@ class Article extends Model
             'published_at' => 'datetime',
             'scraped_at' => 'datetime',
             'analysis_status' => AnalysisStatus::class,
+            'analysis_started_at' => 'datetime',
+            'analysis_completed_at' => 'datetime',
         ];
     }
 

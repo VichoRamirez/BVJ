@@ -43,7 +43,9 @@ test('parses a valid analysis and includes provider metadata', function () {
         ->and($result->companies)->toBe(['Banco Central'])
         ->and($result->provider)->toBe('test-provider')
         ->and($result->model)->toBe('test-model')
-        ->and($result->schemaVersion)->toBe('1.0');
+        ->and($result->schemaVersion)->toBe('1.0')
+        ->and($result->rawResponse['content'])->toBe(analysisResponse())
+        ->and($result->rawResponse['payload']['summary'])->toBe('El banco central mantuvo su tasa de interés.');
 });
 
 test('accepts empty lists without inventing entities', function () {
@@ -156,8 +158,11 @@ test('validates article URL as optional HTTPS input', function (string $url, boo
         ->toThrow(InvalidArticleUrlException::class);
 })->with([
     'https' => ['https://example.com/noticia?x=1', true],
-    'http' => ['http://example.com/noticia', false],
+    'http' => ['http://example.com/noticia', true],
     'missing host' => ['https:///noticia', false],
+    'username only' => ['https://user@example.com/noticia', false],
+    'password only' => ['https://:secret@example.com/noticia', false],
+    'credentials' => ['https://user:secret@example.com/noticia', false],
     'too long' => ['https://example.com/'.str_repeat('a', 2_048), false],
 ]);
 

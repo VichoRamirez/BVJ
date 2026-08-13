@@ -9,6 +9,7 @@ namespace App\Enums;
 enum AnalysisStatus: string
 {
     case Pending = 'pending';
+    case Processing = 'processing';
     case Completed = 'completed';
     case Failed = 'failed';
 
@@ -16,6 +17,7 @@ enum AnalysisStatus: string
     {
         return match ($this) {
             self::Pending => 'Análisis pendiente',
+            self::Processing => 'Análisis en curso',
             self::Completed => 'Analizado',
             self::Failed => 'Análisis fallido',
         };

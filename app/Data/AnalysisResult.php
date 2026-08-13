@@ -11,6 +11,7 @@ readonly class AnalysisResult
      * @param  list<string>  $companies
      * @param  list<string>  $people
      * @param  list<string>  $tags
+     * @param  array<string, mixed>  $rawResponse
      */
     public function __construct(
         public string $summary,
@@ -23,5 +24,6 @@ readonly class AnalysisResult
         public string $provider,
         public string $model,
         public string $schemaVersion,
+        public array $rawResponse,
     ) {}
 }

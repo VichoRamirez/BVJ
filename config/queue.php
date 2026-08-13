@@ -1,5 +1,12 @@
 <?php
 
+$queueRetryAfter = max(
+    (int) env('DB_QUEUE_RETRY_AFTER', 240),
+    (int) env('NEWS_AI_JOB_TIMEOUT', 180) + 31,
+    max((int) env('NEWS_CLUSTER_JOB_TIMEOUT', 120), 30) + 31,
+    max((int) env('NEWS_BRIEFING_JOB_TIMEOUT', 120), 30) + 31,
+);
+
 return [
 
     /*
@@ -40,10 +47,7 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
-            'retry_after' => max(
-                (int) env('DB_QUEUE_RETRY_AFTER', 240),
-                (int) env('NEWS_AI_JOB_TIMEOUT', 180) + 31,
-            ),
+            'retry_after' => $queueRetryAfter,
             'after_commit' => false,
         ],
 
@@ -51,7 +55,7 @@ return [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),
             'queue' => env('BEANSTALKD_QUEUE', 'default'),
-            'retry_after' => (int) env('BEANSTALKD_QUEUE_RETRY_AFTER', 90),
+            'retry_after' => max((int) env('BEANSTALKD_QUEUE_RETRY_AFTER', 90), $queueRetryAfter),
             'block_for' => 0,
             'after_commit' => false,
         ],
@@ -71,7 +75,7 @@ return [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
+            'retry_after' => max((int) env('REDIS_QUEUE_RETRY_AFTER', 90), $queueRetryAfter),
             'block_for' => null,
             'after_commit' => false,
         ],

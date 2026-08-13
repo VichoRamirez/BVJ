@@ -3,7 +3,173 @@
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
 
+/* ══════════════════════════════════════════════════════════════════════════
+   Tokens — sistema "Modernist" con las correcciones de AUDITORIA-UI.md
+   aplicadas (H1 color semántico, H2 contraste, H3 bordes, H4 acento en texto
+   pequeño, H7 modo oscuro, H8 movimiento).
+
+   Los contrastes anotados están medidos, no estimados. No cambiar un valor
+   sin volver a medirlo contra el fondo en el que se usa.
+   ══════════════════════════════════════════════════════════════════════ */
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-        'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-sans: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+    --font-heading: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+
+    /* Superficies e ink */
+    --color-paper: #f3f2f2;
+    --color-surface: #eae9e9;
+    --color-ink: #201e1d; /* 14.86:1 sobre paper */
+    --color-muted: #5f5e5d; /* 5.79:1 — texto secundario (H2) */
+    --color-rule: #9f9d9d; /* reglas decorativas de 2px */
+    --color-edge: #7f7d7d; /* 3.66:1 — bordes de control (H3) */
+
+    /* Acento: tres pasos con trabajos distintos (H4) */
+    --color-accent: #ec3013; /* marcas, cuadrados, tipografía display */
+    --color-accent-fill: #d42a0f; /* fondos que llevan texto papel — 4.54:1 */
+    --color-accent-strong: #ae1800; /* texto pequeño en acento — 6.41:1 */
+    --color-accent-soft: #fff2ef;
+
+    /* Roles semánticos del dominio financiero (H1) */
+    --color-positive: #0f6b3d; /* 5.89:1 — alza */
+    --color-positive-soft: #e2f0e8;
+    --color-negative: #ae1800; /* 6.41:1 — baja */
+    --color-negative-soft: #fff2ef;
+
+    /* Rampa neutral para las series de gráficos */
+    --color-series-1: #201e1d;
+    --color-series-2: #605d5d;
+    --color-series-3: #9b9797;
+    --color-series-4: #ae1800;
+    --color-series-5: #0f6b3d;
+
+    --motion-fast: 180ms;
+    --motion-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Modo oscuro (H7): se redefinen los tokens, no se duplican las clases.
+   Cada valor remedido contra el fondo oscuro. */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-paper: #171616;
+        --color-surface: #201e1d;
+        --color-ink: #f3f2f2; /* 16.16:1 */
+        --color-muted: #b5b4b4; /* 8.73:1 */
+        --color-rule: #646363; /* 3.02:1 */
+        --color-edge: #858484; /* 4.84:1 */
+
+        --color-accent: #ff9783; /* 8.61:1 — el rojo base se apaga sobre tinta */
+        --color-accent-fill: #ff9783; /* lleva texto oscuro encima */
+        --color-accent-strong: #ffc4b8; /* 11.90:1 */
+        --color-accent-soft: #3a1a13;
+
+        --color-positive: #5bc98e; /* 8.76:1 */
+        --color-positive-soft: #10231a;
+        --color-negative: #ff9783;
+        --color-negative-soft: #3a1a13;
+
+        --color-series-1: #f3f2f2;
+        --color-series-2: #bab6b6;
+        --color-series-3: #7d7979;
+        --color-series-4: #ff9783;
+        --color-series-5: #5bc98e;
+    }
+}
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+    }
+
+    body {
+        background-color: var(--color-paper);
+        color: var(--color-ink);
+        font-family: var(--font-sans);
+        font-size: 1rem; /* 16px — mínimo de lectura (H6) */
+        line-height: 1.6;
+        text-wrap: pretty;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+        font-family: var(--font-heading);
+        font-weight: 800;
+        line-height: 1.12;
+        letter-spacing: -0.015em;
+        text-wrap: balance;
+    }
+
+    /* Nada se redondea: --radius-md es 0 a propósito en el sistema. */
+    * {
+        border-radius: 0;
+    }
+
+    /* El foco de teclado es del sistema, nunca el azul del navegador. */
+    :focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
+    }
+
+    ::selection {
+        background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+    }
+
+    /* Cifras tabulares en todo dato numérico (H12): sin baile de dígitos. */
+    .tabular {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: 'tnum' 1;
+    }
+
+    /* Estados con transición, nunca saltos de 0ms (H8). */
+    a,
+    button,
+    summary,
+    input,
+    .transition-state {
+        transition:
+            background-color var(--motion-fast) var(--motion-ease),
+            border-color var(--motion-fast) var(--motion-ease),
+            color var(--motion-fast) var(--motion-ease),
+            opacity var(--motion-fast) var(--motion-ease);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        html {
+            scroll-behavior: auto;
+        }
+
+        *,
+        *::before,
+        *::after {
+            transition-duration: 0.01ms !important;
+            animation-duration: 0.01ms !important;
+        }
+    }
+}
+
+@layer components {
+    /* El enlace de salto: primer elemento tabulable de cada página. */
+    .skip-link {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        z-index: 100;
+        padding: 0.75rem 1rem;
+        background-color: var(--color-ink);
+        color: var(--color-paper);
+        font-weight: 600;
+    }
+
+    .skip-link:focus {
+        left: 0;
+    }
+
+    /* Área táctil mínima de 44px en puntero grueso (H5). */
+    @media (pointer: coarse) {
+        .touch-target {
+            min-height: 44px;
+            min-width: 44px;
+        }
+    }
 }

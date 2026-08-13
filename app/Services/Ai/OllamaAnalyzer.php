@@ -5,6 +5,8 @@ namespace App\Services\Ai;
 use App\Contracts\NewsAnalyzer;
 use App\Data\AnalysisResult;
 use App\Data\NewsArticleInput;
+use App\Enums\NewsCategory;
+use App\Enums\RelevanceLevel;
 use App\Exceptions\OllamaConfigurationException;
 use App\Exceptions\OllamaInvalidResponseException;
 use App\Exceptions\OllamaNonRetryableStatusException;
@@ -34,20 +36,30 @@ class OllamaAnalyzer implements NewsAnalyzer
     private const MAX_RESPONSE_BYTES = 10_485_760;
 
     /** @var array<string, mixed> */
-    private const RESPONSE_SCHEMA = [
-        'type' => 'object',
-        'additionalProperties' => false,
-        'properties' => [
-            'summary' => ['type' => 'string'],
-            'category' => ['type' => 'string', 'enum' => ['economy', 'markets', 'companies', 'politics', 'international', 'technology', 'other']],
-            'relevance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical']],
-            'companies' => ['type' => 'array', 'items' => ['type' => 'string']],
-            'people' => ['type' => 'array', 'items' => ['type' => 'string']],
-            'tags' => ['type' => 'array', 'items' => ['type' => 'string']],
-            'importance_explanation' => ['type' => 'string'],
-        ],
-        'required' => ['summary', 'category', 'relevance', 'companies', 'people', 'tags', 'importance_explanation'],
-    ];
+    private static array $RESPONSE_SCHEMA_CACHE = [];
+
+    /** @return array<string, mixed> */
+    private static function getResponseSchema(): array
+    {
+        if (self::$RESPONSE_SCHEMA_CACHE === []) {
+            self::$RESPONSE_SCHEMA_CACHE = [
+                'type' => 'object',
+                'additionalProperties' => false,
+                'properties' => [
+                    'summary' => ['type' => 'string'],
+                    'category' => ['type' => 'string', 'enum' => array_column(NewsCategory::cases(), 'value')],
+                    'relevance' => ['type' => 'string', 'enum' => array_column(RelevanceLevel::cases(), 'value')],
+                    'companies' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'people' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'importance_explanation' => ['type' => 'string'],
+                ],
+                'required' => ['summary', 'category', 'relevance', 'companies', 'people', 'tags', 'importance_explanation'],
+            ];
+        }
+
+        return self::$RESPONSE_SCHEMA_CACHE;
+    }
 
     /** @var array<string, mixed> */
     private array $config;
@@ -65,7 +77,7 @@ class OllamaAnalyzer implements NewsAnalyzer
             'model' => $model,
             'stream' => false,
             'options' => ['temperature' => 0],
-            'format' => self::RESPONSE_SCHEMA,
+            'format' => self::getResponseSchema(),
             'messages' => [
                 ['role' => 'system', 'content' => 'Analiza datos de noticias y responde exclusivamente con JSON válido según el schema.'],
                 ['role' => 'user', 'content' => view('prompts.analyze-article-v1', compact('article'))->render()],

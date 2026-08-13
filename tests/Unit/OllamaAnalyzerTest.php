@@ -2,6 +2,8 @@
 
 use App\Contracts\NewsAnalyzer;
 use App\Data\NewsArticleInput;
+use App\Enums\NewsCategory;
+use App\Enums\RelevanceLevel;
 use App\Exceptions\AnalysisValidationException;
 use App\Exceptions\OllamaConfigurationException;
 use App\Exceptions\OllamaInvalidResponseException;
@@ -73,6 +75,8 @@ test('sends the exact Ollama chat payload and parses the response', function () 
             && $data['options']['temperature'] === 0
             && $data['format']['type'] === 'object'
             && $data['format']['additionalProperties'] === false
+            && $data['format']['properties']['category']['enum'] === array_column(NewsCategory::cases(), 'value')
+            && $data['format']['properties']['relevance']['enum'] === array_column(RelevanceLevel::cases(), 'value')
             && $data['messages'][0]['role'] === 'system'
             && $data['messages'][1]['role'] === 'user'
             && $request->header('Authorization') === []

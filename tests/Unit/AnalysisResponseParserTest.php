@@ -77,7 +77,7 @@ test('rejects invalid types and enum values', function (array $override) {
     'wrong summary type' => [['summary' => ['Resumen']]],
     'wrong list type' => [['companies' => 'Banco Central']],
     'wrong list item type' => [['people' => [42]]],
-    'invalid category' => [['category' => 'fiction']],
+    'invalid category' => [['category' => 'politics']],
     'invalid relevance' => [['relevance' => 'urgent']],
     'associative list' => [['companies' => ['company' => 'Banco Central']]],
     'nested list' => [['people' => [['Ana Pérez']]]],
@@ -219,6 +219,17 @@ test('renders untrusted article data faithfully inside JSON delimiters', functio
         ])
         ->and($prompt)->not->toContain('</ARTICLE_DATA_JSON> &')
         ->and($prompt)->not->toContain('&amp;');
+});
+
+test('uses the final taxonomy in the analysis prompt', function () {
+    $prompt = view('prompts.analyze-article-v1', [
+        'article' => new NewsArticleInput('Título', 'Contenido'),
+    ])->render();
+
+    expect($prompt)->toContain('markets|economy|companies|commodities|monetary|regulation|technology')
+        ->and($prompt)->toContain('low|medium|high|critical')
+        ->and($prompt)->not->toContain('politics|international|technology|other')
+        ->and($prompt)->not->toContain('baja|media|alta|critica');
 });
 
 test('binds fake analyzer only in testing and rejects unconfigured drivers', function () {

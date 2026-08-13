@@ -53,13 +53,13 @@ Migraciones en orden de dependencia:
 
 *La propuesta asigna la Semana 1 a "Propuesta + Mockup" (Vicente, Bruno), que ya está entregada. Esta semana se usa para levantar la base técnica en paralelo.*
 
-- [ ] `composer install` + `npm install`, crear `database/database.sqlite`, `php artisan migrate`.
+- [ ] `composer install` + `npm install`, crear `database/database.sqlite`, `php artisan migrate`. *(hecho en local; falta verificar en las máquinas del resto del equipo)*
 - [ ] **Pedir aprobación e instalar dependencias**: `roach-php/laravel`, `scheb/yahoo-finance-api`, `laraveldaily/laravel-charts`.
 - [ ] Agregar `config/newsscraper.php` (driver de IA, umbrales de relevancia, N eventos por briefing, símbolos de mercado a seguir) y las variables nuevas a `.env.example`.
-- [ ] Crear los Enums del dominio.
+- [ ] Crear los Enums del dominio. *(en progreso: los cinco existen en `app/Enums/` con sus etiquetas; falta usarlos como casts en los modelos)*
 - [ ] Migraciones + modelos + factories + seeders (`SourceSeeder` con Diario Financiero y Bloomberg).
 - [ ] Definir relaciones Eloquent con tipado explícito (`Article::source()`, `Article::analysis()`, `Article::entities()`, `Event::articles()`, `Briefing::events()`).
-- [ ] Layout Blade base + Tailwind funcionando (`resources/views/layouts/app.blade.php`).
+- [ ] Layout Blade base + Tailwind funcionando. *(en progreso: el layout vive en `resources/views/components/layouts/app.blade.php` y los tokens del sistema de diseño están en `resources/css/app.css`)*
 
 **Hecho cuando:** `php artisan migrate:fresh --seed` corre limpio y un test de factories crea Article + Analysis + Event.
 
@@ -76,6 +76,12 @@ Migraciones en orden de dependencia:
 
 ### 3.2 Rutas y vistas (con datos de factories mientras la IA no esté lista)
 
+> **En progreso.** Las seis rutas, el layout, las vistas y los componentes Blade ya están
+> levantados y con tests de smoke, pero sobre `app/Support/DemoContent.php` (datos de
+> demostración), no sobre factories: los modelos todavía no existen. Queda abierto a cambios
+> de diseño y de estructura — nada aquí es definitivo hasta que se conecte la base de datos y
+> las vistas se prueben con datos reales. Ver `AUDITORIA-UI.md` para las decisiones de interfaz.
+
 | Ruta | Nombre | Contenido |
 |---|---|---|
 | `/` | `home` | Último briefing publicado |
@@ -85,10 +91,12 @@ Migraciones en orden de dependencia:
 | `/categorias/{category}` | `categories.show` | Eventos filtrados por categoría |
 | `/mercados` | `markets.index` | Gráficos de Yahoo Finance |
 
-- [ ] Componentes Blade reutilizables: `<x-event-card>`, `<x-relevance-badge>`, `<x-source-pill>`, `<x-entity-list>`.
-- [ ] Diseño escaneable: tarjeta = título, badge de relevancia, categoría, fuentes, resumen de 2–3 líneas, entidades, enlace al original. Responsive y con aviso "resumen generado por IA".
+- [ ] Componentes Blade reutilizables: `<x-event-card>`, `<x-relevance-badge>`, `<x-source-pill>`, `<x-entity-list>`. *(borrador levantado, sujeto a revisión)*
+- [ ] Diseño escaneable: tarjeta = título, badge de relevancia, categoría, fuentes, resumen de 2–3 líneas, entidades, enlace al original. Responsive y con aviso "resumen generado por IA". *(borrador levantado, falta revisión visual en móvil y modo oscuro)*
+- [ ] Estados vacío / carga / error del pipeline asíncrono. *(vacío y fuente caída hechos; falta carga)*
+- [ ] Reemplazar `DemoContent` por consultas Eloquent con eager loading una vez existan los modelos.
 
-**Hecho cuando:** todas las rutas renderizan con datos sembrados y hay feature tests de smoke por cada una.
+**Hecho cuando:** todas las rutas renderizan con datos sembrados **desde la base de datos** (no de demostración) y hay feature tests de smoke por cada una.
 
 ---
 

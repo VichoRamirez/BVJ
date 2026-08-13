@@ -5,7 +5,7 @@ Analiza el artículo en español y responde exclusivamente con un objeto JSON v�
 La respuesta debe tener exactamente estas claves:
 {
   "summary": "resumen factual en español",
-  "category": "economy|markets|companies|politics|international|technology|other",
+  "category": "markets|economy|companies|commodities|monetary|regulation|technology",
   "relevance": "low|medium|high|critical",
   "companies": ["empresas mencionadas"],
   "people": ["personas mencionadas"],

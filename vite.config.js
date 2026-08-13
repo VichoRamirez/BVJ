@@ -8,9 +8,12 @@ export default defineConfig({
         laravel({
             input: ['resources/css/app.css', 'resources/js/app.js'],
             refresh: true,
+            // Archivo es la familia del sistema Modernist. Se sirve desde Bunny en
+            // lugar de un @import a Google Fonts: evita la cascada bloqueante y el
+            // tercero (AUDITORIA-UI.md H13).
             fonts: [
-                bunny('Instrument Sans', {
-                    weights: [400, 500, 600],
+                bunny('Archivo', {
+                    weights: [400, 600, 800],
                 }),
             ],
         }),

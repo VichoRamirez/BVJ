@@ -17,6 +17,9 @@ use Illuminate\Support\Facades\Http;
 beforeEach(function (): void {
     config(['newsscraper.scraping.verify_public_address' => false]);
     config(['newsscraper.scraping.delay_seconds' => 0]);
+    // Estos tests miran el parseo del listado. La visita a cada nota se prueba
+    // aparte, con sus propias fixtures de artículo.
+    config(['newsscraper.scraping.fetch_article_metadata' => false]);
 });
 
 function fakeListing(string $host, string $fixture): void
@@ -158,4 +161,158 @@ it('lee la fecha del listado en el formato chileno d/m/Y', function () {
     // El primer `.card__date` viene vacío: hay que tomar el primero con texto.
     expect($article->publishedAt->format('Y-m-d'))->toBe('2026-08-12')
         ->and($article->url)->toBe('https://www.df.cl/mercados/pensiones/nota-con-fecha');
+});
+
+/*
+ * Visita a la nota para completar fecha y autor.
+ *
+ * Los listados chilenos casi no publican fecha (medido el 2026-08-13: Diario
+ * Financiero 12 de 103 tarjetas, Pulso 0 de 77) y sin ella `ScrapeSourceJob`
+ * cae a la hora del scrape, dejando toda la corrida con el mismo instante. La
+ * agrupación y el corte del briefing se miden contra `published_at`.
+ */
+
+function fakeListingWithArticle(string $host, string $listingUrl, string $listingHtml, string $articleHtml, int $articleStatus = 200): void
+{
+    Http::fake([
+        $host.'/robots.txt' => Http::response("User-agent: *\n"),
+        $listingUrl => Http::response($listingHtml),
+        $host.'/*' => Http::response($articleHtml, $articleStatus),
+    ]);
+}
+
+function dfListingHtml(): string
+{
+    return <<<'HTML'
+        <!doctype html><html><body>
+        <article class="card">
+            <div class="card__content">
+                <a href="/mercados/bolsa-monedas/nota-sin-fecha">
+                    <h3 class="card__title">Nota sin fecha en el listado</h3>
+                    <p class="card__description">Bajada de la nota.</p>
+                </a>
+            </div>
+        </article>
+        </body></html>
+        HTML;
+}
+
+it('completa fecha y autor abriendo la nota cuando el listado no los trae', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => true]);
+
+    fakeListingWithArticle('www.df.cl', 'www.df.cl/mercados', dfListingHtml(), <<<'HTML'
+        <!doctype html><html><head>
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@graph":[
+          {"@type":"NewsArticle","datePublished":"2026-08-13T14:08:49Z",
+           "author":{"@type":"Person","name":"  Camila   Rojas "}}
+        ]}
+        </script>
+        </head><body>Cuerpo con copyright que no se guarda.</body></html>
+        HTML);
+
+    $article = app(DiarioFinancieroSpider::class)->scrape(Source::factory()->create(), 25)[0];
+
+    expect($article->publishedAt->format('Y-m-d H:i:s'))->toBe('2026-08-13 14:08:49')
+        ->and($article->author)->toBe('Camila Rojas')
+        // El cuerpo de la nota no se guarda: la bajada sigue siendo la del listado.
+        ->and($article->excerpt)->toBe('Bajada de la nota.')
+        ->and($article->content)->toBe('Bajada de la nota.');
+});
+
+it('lee la fecha desde article:published_time cuando no hay JSON-LD', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => true]);
+
+    fakeListingWithArticle('www.latercera.com', 'www.latercera.com/canal/pulso/', <<<'HTML'
+        <!doctype html><html><body>
+        <div class="story-card">
+            <p class="story-card__description">Bajada de Pulso.</p>
+            <h2 class="story-card__headline"><a href="/pulso/noticia/una-nota/">Una nota</a></h2>
+        </div>
+        </body></html>
+        HTML, <<<'HTML'
+        <!doctype html><html><head>
+        <meta property="article:published_time" content="2026-08-13T13:14:49.679Z">
+        <meta name="author" content="Redacción Pulso">
+        </head><body></body></html>
+        HTML);
+
+    $article = app(PulsoSpider::class)->scrape(Source::factory()->create(), 25)[0];
+
+    expect($article->publishedAt->format('Y-m-d H:i'))->toBe('2026-08-13 13:14')
+        ->and($article->author)->toBe('Redacción Pulso');
+});
+
+it('conserva el artículo aunque la nota no responda', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => true]);
+
+    fakeListingWithArticle('www.df.cl', 'www.df.cl/mercados', dfListingHtml(), '', 500);
+
+    $articles = app(DiarioFinancieroSpider::class)->scrape(Source::factory()->create(), 25);
+
+    // Perder la hora exacta es aceptable; perder el artículo, no.
+    expect($articles)->toHaveCount(1)
+        ->and($articles[0]->publishedAt)->toBeNull()
+        ->and($articles[0]->title)->toBe('Nota sin fecha en el listado');
+});
+
+it('no pisa la fecha del listado con la de la nota', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => true]);
+
+    fakeListingWithArticle('www.df.cl', 'www.df.cl/mercados', <<<'HTML'
+        <!doctype html><html><body>
+        <article class="card">
+            <div class="card__content">
+                <span class="card__date">11/08/2026</span>
+                <a href="/mercados/bolsa-monedas/con-fecha">
+                    <h3 class="card__title">Con fecha en el listado</h3>
+                    <p class="card__description">Bajada.</p>
+                </a>
+            </div>
+        </article>
+        </body></html>
+        HTML, <<<'HTML'
+        <!doctype html><html><head>
+        <meta property="article:published_time" content="2026-08-13T13:00:00Z">
+        </head><body></body></html>
+        HTML);
+
+    $article = app(DiarioFinancieroSpider::class)->scrape(Source::factory()->create(), 25)[0];
+
+    expect($article->publishedAt->format('Y-m-d'))->toBe('2026-08-11');
+});
+
+it('no abre ninguna nota cuando el enriquecimiento está apagado', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => false]);
+
+    fakeListingWithArticle('www.df.cl', 'www.df.cl/mercados', dfListingHtml(), '<html></html>');
+
+    $article = app(DiarioFinancieroSpider::class)->scrape(Source::factory()->create(), 25)[0];
+
+    expect($article->publishedAt)->toBeNull();
+    Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/nota-sin-fecha'));
+});
+
+it('interpreta la fecha del listado como el comienzo del día, no como la hora del scrape', function () {
+    config(['newsscraper.scraping.fetch_article_metadata' => false]);
+    // Sin el `!` en el formato, createFromFormat rellena la hora que el formato
+    // no trae con la del reloj, y "12/08/2026" quedaba como las 17:45 de hoy.
+    $this->travelTo(now()->setTime(17, 45));
+
+    Http::fake([
+        'www.df.cl/robots.txt' => Http::response("User-agent: *\n"),
+        'www.df.cl/*' => Http::response(<<<'HTML'
+            <!doctype html><html><body>
+            <article class="card"><div class="card__content">
+                <span class="card__date">12/08/2026</span>
+                <a href="/mercados/banca/nota"><h3 class="card__title">Nota</h3>
+                <p class="card__description">Bajada.</p></a>
+            </div></article>
+            </body></html>
+            HTML),
+    ]);
+
+    $article = app(DiarioFinancieroSpider::class)->scrape(Source::factory()->create(), 25)[0];
+
+    expect($article->publishedAt->format('Y-m-d H:i:s'))->toBe('2026-08-12 00:00:00');
 });

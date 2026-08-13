@@ -4,7 +4,7 @@ use App\Exceptions\DisallowedScrapingTargetException;
 use App\Exceptions\SourceScrapingException;
 use App\Models\Source;
 use App\Services\Scraping\SafeHttpFetcher;
-use App\Spiders\BbcMundoEconomiaSpider;
+use App\Spiders\BbcBusinessSpider;
 use Illuminate\Support\Facades\Http;
 
 /*
@@ -23,19 +23,19 @@ function fakeFeed(string $body, int $status = 200, string $robots = "User-agent:
 {
     Http::fake([
         'feeds.bbci.co.uk/robots.txt' => Http::response($robots),
-        'feeds.bbci.co.uk/mundo/economia/rss.xml' => Http::response($body, $status),
+        'feeds.bbci.co.uk/news/business/rss.xml' => Http::response($body, $status),
     ]);
 }
 
 function bbcFixture(): string
 {
-    return file_get_contents(base_path('tests/Fixtures/bbc-mundo-economia.xml'));
+    return file_get_contents(base_path('tests/Fixtures/bbc-business.xml'));
 }
 
 function scrapeBbc(int $limit = 25): array
 {
-    return app(BbcMundoEconomiaSpider::class)->scrape(
-        Source::factory()->create(['slug' => 'bbc-mundo-economia']),
+    return app(BbcBusinessSpider::class)->scrape(
+        Source::factory()->create(['slug' => 'bbc-business']),
         $limit
     );
 }
@@ -46,7 +46,7 @@ it('extrae los artículos del feed real', function () {
     $articles = scrapeBbc();
 
     expect($articles)->toHaveCount(3)
-        ->and($articles[0]->url)->toStartWith('https://www.bbc.com/mundo/articles/')
+        ->and($articles[0]->url)->toStartWith('https://www.bbc.co.uk/news/articles/')
         ->and($articles[0]->title)->not->toBeEmpty()
         ->and($articles[0]->excerpt)->not->toBeEmpty()
         ->and($articles[0]->publishedAt)->toBeInstanceOf(DateTimeImmutable::class);
@@ -65,7 +65,7 @@ it('convierte el HTML del feed en texto plano', function () {
             <item>
                 <title>El &amp;quot;cobre&amp;quot; sube</title>
                 <description><![CDATA[<p>Sube <b>2%</b>&nbsp;en la sesión.</p>]]></description>
-                <link>https://www.bbc.com/mundo/articles/abc</link>
+                <link>https://www.bbc.co.uk/news/articles/abc</link>
                 <pubDate>Wed, 12 Aug 2026 11:57:01 GMT</pubDate>
             </item>
         </channel></rss>
@@ -87,7 +87,7 @@ it('recorta el texto guardado al máximo configurado', function () {
             <item>
                 <title>Titular</title>
                 <description>Una bajada bastante larga que supera con comodidad los límites configurados.</description>
-                <link>https://www.bbc.com/mundo/articles/abc</link>
+                <link>https://www.bbc.co.uk/news/articles/abc</link>
             </item>
         </channel></rss>
         XML);
@@ -105,9 +105,9 @@ it('descarta un item malformado sin perder el resto del feed', function () {
         <?xml version="1.0" encoding="UTF-8"?>
         <rss version="2.0"><channel>
             <item><title>Sin enlace</title><description>x</description></item>
-            <item><title></title><description>x</description><link>https://www.bbc.com/mundo/articles/sin-titulo</link></item>
-            <item><title>Sin bajada</title><link>https://www.bbc.com/mundo/articles/sin-bajada</link></item>
-            <item><title>Válido</title><description>Bajada con texto.</description><link>https://www.bbc.com/mundo/articles/ok</link></item>
+            <item><title></title><description>x</description><link>https://www.bbc.co.uk/news/articles/sin-titulo</link></item>
+            <item><title>Sin bajada</title><link>https://www.bbc.co.uk/news/articles/sin-bajada</link></item>
+            <item><title>Válido</title><description>Bajada con texto.</description><link>https://www.bbc.co.uk/news/articles/ok</link></item>
         </channel></rss>
         XML);
 
@@ -140,7 +140,7 @@ it('no sale a un host fuera de la allowlist', function () {
 });
 
 it('obedece a robots.txt', function () {
-    fakeFeed(bbcFixture(), robots: "User-agent: *\nDisallow: /mundo/\n");
+    fakeFeed(bbcFixture(), robots: "User-agent: *\nDisallow: /news/\n");
 
     expect(fn () => scrapeBbc())
         ->toThrow(DisallowedScrapingTargetException::class, 'robots.txt prohíbe');
@@ -148,20 +148,20 @@ it('obedece a robots.txt', function () {
 
 it('deja pasar la ruta cuando robots.txt la permite explícitamente', function () {
     // Allow más específico que el Disallow: gana Allow.
-    fakeFeed(bbcFixture(), robots: "User-agent: *\nDisallow: /mundo/\nAllow: /mundo/economia/\n");
+    fakeFeed(bbcFixture(), robots: "User-agent: *\nDisallow: /news/\nAllow: /news/business/\n");
 
     expect(scrapeBbc())->toHaveCount(3);
 });
 
 it('rechaza una URL que no sea HTTPS', function () {
-    expect(fn () => app(SafeHttpFetcher::class)->get('http://feeds.bbci.co.uk/mundo/economia/rss.xml'))
+    expect(fn () => app(SafeHttpFetcher::class)->get('http://feeds.bbci.co.uk/news/business/rss.xml'))
         ->toThrow(DisallowedScrapingTargetException::class, 'HTTPS');
 });
 
 it('revalida la allowlist en cada redirección', function () {
     Http::fake([
         'feeds.bbci.co.uk/robots.txt' => Http::response("User-agent: *\n"),
-        'feeds.bbci.co.uk/mundo/economia/rss.xml' => Http::response('', 302, ['Location' => 'https://evil.example/feed.xml']),
+        'feeds.bbci.co.uk/news/business/rss.xml' => Http::response('', 302, ['Location' => 'https://evil.example/feed.xml']),
     ]);
 
     // Una fuente comprometida no puede empujar al bot hacia otro dominio.

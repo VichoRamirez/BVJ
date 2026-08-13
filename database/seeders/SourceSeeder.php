@@ -3,7 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Source;
-use App\Spiders\BbcMundoEconomiaSpider;
+use App\Spiders\BbcBusinessSpider;
 use App\Spiders\DiarioFinancieroSpider;
 use App\Spiders\PulsoSpider;
 use Illuminate\Database\Seeder;
@@ -27,10 +27,10 @@ class SourceSeeder extends Seeder
 
         $sources = [
             [
-                'name' => 'BBC News Mundo · Economía',
-                'slug' => 'bbc-mundo-economia',
-                'base_url' => 'https://www.bbc.com/mundo/topics/c1e9k71epr7t',
-                'spider_class' => BbcMundoEconomiaSpider::class,
+                'name' => 'BBC News · Business',
+                'slug' => 'bbc-business',
+                'base_url' => 'https://www.bbc.com/business',
+                'spider_class' => BbcBusinessSpider::class,
                 'is_active' => true,
                 'failure_count' => 0,
                 'last_failure_reason' => null,

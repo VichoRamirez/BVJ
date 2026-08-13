@@ -5,7 +5,14 @@ Contexto, decisiones y reglas están en `CLAUDE.md`; el alcance viene de `NewScr
 
 **Estado actual:** el dominio y el cableado del pipeline están implementados. Existen las doce tablas con sus modelos, factories y seeders; las seis rutas del frontend leen de la base de datos; y los cuatro jobs (`ScrapeSourceJob`, `AnalyzeArticleJob`, `ClusterArticlesJob`, `GenerateBriefingJob`), el orquestador `news:pipeline` y el scheduler de 07:00/18:00 ya corren de punta a punta.
 
-**Lo que falta es la extracción de noticias:** los spiders detrás de `App\Contracts\SourceScraper`. Los datos de mercado ya se capturan de Yahoo Finance en vivo (`php artisan news:markets`). Todos los tests corren sin red — `Http::preventStrayRequests()` está activo en la suite de Feature, así que una llamada sin falsear falla el test en vez de salir a internet.
+Los spiders ya existen (`RssSpider` y `HtmlListingSpider` como bases, más Diario Financiero, BBC Mundo y Pulso), la capa de IA tiene cadena de respaldo con OpenRouter, y los datos de mercado se capturan de Yahoo Finance en vivo (`php artisan news:markets`). **La suite pasa completa: 265 tests, 0 fallando.** Ninguno toca la red — `Http::preventStrayRequests()` está activo en Feature, así que una llamada sin falsear falla el test en vez de salir a internet.
+
+**Lo que falta** está en §5: comprobar la deduplicación arreglada contra los 18 artículos reales, reanalizar los 25 de BBC que quedaron con el modelo falso, el guion de la demo, y los estados de UI de Vicente.
+
+> **Dos trampas del entorno que ya nos costaron tiempo:**
+>
+> - Si ves `Class ... not found` de algo que sí está en el repo, te falta `composer install`. El `vendor/` se desincroniza en cada pull que trae dependencias nuevas.
+> - Si `php artisan test` no imprime **nada** y sale con código 1, hay un fatal de PHP que `laravel/pao` se está tragando. Corré `PAO_DISABLE=1 php vendor/bin/pest` para ver el error de verdad.
 
 > **Bloqueo de entorno:** el `composer.lock` fue resuelto en PHP 8.4+ (`symfony/*` 8.1 pide `php >=8.4.1`, y `pestphp/pest ^5` pide `php ^8.4` con PHPUnit 13). **El proyecto no corre en PHP 8.3.** Cada integrante necesita PHP 8.4 o 8.5 instalado; con 8.3 el `composer install` falla en la resolución.
 
@@ -74,7 +81,7 @@ Migraciones en orden de dependencia:
 - [x] Crear los Enums del dominio. Los cinco están en uso como casts en los modelos.
 - [x] Migraciones + modelos + factories + seeders (`SourceSeeder` con las cinco fuentes del MVP).
 - [x] Definir relaciones Eloquent con tipado explícito (`Article::source()`, `Article::analysis()`, `Article::entities()`, `Event::articles()`, `Briefing::events()`).
-- [ ] Layout Blade base + Tailwind funcionando. *(el layout y los tokens están; falta emitir `@fonts` en `resources/views/components/layouts/app.blade.php` —hoy Archivo nunca carga porque solo lo emitía el `welcome.blade.php` que se eliminó— más la revisión móvil y de modo oscuro, que firma Vicente)*
+- [x] Layout Blade base + Tailwind funcionando. `@fonts` ya se emite en `resources/views/components/layouts/app.blade.php`: antes solo lo hacía el `welcome.blade.php` que se eliminó, así que Archivo nunca cargaba y toda la app corría en el fallback `ui-sans-serif`. Verificado en el HTML servido: precarga los tres pesos (400/600/800). *(la revisión móvil y de modo oscuro las firma Vicente)*
 
 **Hecho cuando:** `php artisan migrate:fresh --seed` corre limpio y un test de factories crea Article + Analysis + Event. ✔ `tests/Feature/DomainFactoriesTest.php`.
 
@@ -105,8 +112,9 @@ Migraciones en orden de dependencia:
 > y devuelve `list<ScrapedArticle>`. `ScrapeSourceJob` habla solo con ese
 > contrato, así que elegir A o B cambia las implementaciones, no el pipeline.
 > `SourceScraperResolver` construye el spider desde `sources.spider_class`; una
-> fuente sin spider configurado se trata como fuente caída, que es exactamente el
-> estado en que están hoy las cinco.
+> fuente sin spider configurado se trata como fuente caída. Hoy tienen araña
+> Diario Financiero, BBC Mundo y Pulso; Bloomberg Línea, El Mercurio Inversiones
+> y Reuters siguen inactivas.
 
 **Decisión tomada y ejecutada: opción B.** Nada de Roach. `SafeHttpFetcher` sobre el HTTP client de Laravel; RSS con `SimpleXMLElement` (parte de PHP) y HTML con `symfony/dom-crawler` v8.1.1 + `symfony/css-selector` v8.1.0, **ya instaladas y en el `composer.lock`**. No degradan nada: Symfony 8.1 ya estaba en el proyecto y ambas piden `php >=8.4.1`, igual que el resto del lock.
 
@@ -116,6 +124,9 @@ Migraciones en orden de dependencia:
 - [x] `DiarioFinancieroSpider` y `PulsoSpider` sobre `App\Spiders\HtmlListingSpider`, más `BbcMundoEconomiaSpider` sobre `RssSpider`. Verificadas en vivo: 6, 12 y 25 artículos reales recolectados.
 - [x] Poblar `sources.spider_class` en `SourceSeeder`. Las fuentes sin araña quedan **inactivas** con el motivo escrito: una fuente activa sin spider solo acumula fallos.
 - [x] Filtrar lo que no es periodismo. Los listados mezclan notas con publirreportajes, contenido *branded* y videos; cada araña declara en `articlePathPattern()` qué rutas son notas. Publicar publicidad pagada dentro del briefing, resumida por IA, sería engañar al lector.
+- [x] **Fecha y autor reales.** Los listados chilenos casi no los publican (medido el 2026-08-13: DF 12 de 103 tarjetas con fecha, Pulso 0 de 77), así que `HtmlListingSpider` abre cada nota y lee `datePublished` de JSON-LD o `<meta property="article:published_time">`. Solo metadatos: el cuerpo con copyright no se guarda y la bajada sigue siendo la del listado. Nunca descarta —si la nota no responde, el artículo se conserva sin fecha— y se apaga con `NEWS_SCRAPE_FETCH_METADATA=false`. Antes: 1 fecha distinta y 0 autores por corrida; ahora 20/20 en DF y 14/15 en Pulso, con autor en todas.
+- [x] Bug de parseo de fechas: `createFromFormat('d/m/Y')` rellenaba la hora que el formato no trae con la del reloj, así que una nota del día anterior quedaba con la hora del scrape. Corregido con el prefijo `!`.
+- [x] **BBC: cambiado a `bbc.com/business`.** El feed anterior (`feeds.bbci.co.uk/mundo/economia/rss.xml`) no era de economía: devuelve el feed general de BBC Mundo —`<title>` "BBC Mundo", `<link>` a `bbc.com/mundo`— y traía terremotos, eclipses y perfiles biográficos, 25 de 44 artículos de una corrida. `BbcBusinessSpider` usa `feeds.bbci.co.uk/news/business/rss.xml`, verificado en vivo: 25 artículos económicos con 25 fechas reales. **Contrapartida:** publica en inglés y con foco en Reino Unido.
 - [ ] Arañas para Bloomberg Línea y El Mercurio Inversiones.
 
 > **Ninguna fuente chilena publica RSS.** Se probaron Diario Financiero, Pulso, Emol,
@@ -191,7 +202,10 @@ Migraciones en orden de dependencia:
 
 **La identidad de un `Event` es `cluster_key`**, el hash del conjunto exacto de artículos que lo forman (ids + `url_hash`). El slug lleva ese hash como sufijo, así que dos hechos distintos con el mismo titular nunca colisionan, y reprocesar el mismo grupo no duplica nada.
 
-> ### 🔴 La deduplicación entre medios no funciona con datos reales
+> ### ✅ Deduplicación entre medios — arreglado el 2026-08-13
+>
+> **La causa era la comparación de entidades por igualdad exacta.** Lo que sigue es el
+> diagnóstico original; el arreglo aplicado está al final del bloque.
 >
 > **Medido el 2026-08-13** sobre 18 artículos reales de Diario Financiero y Pulso, analizados con
 > modelos de verdad (no el analizador falso). Es el punto 3 del alcance del MVP y lo que
@@ -233,9 +247,30 @@ Migraciones en orden de dependencia:
 > 2. **`shared_entities_minimum` a 1** manteniendo el Jaccard alto: que las entidades manden y el
 >    título sea refuerzo, no requisito.
 >
-> Reproducir el experimento: reiniciar a `pending` los artículos de una fuente, correr
-> `NEWS_AI_DRIVER=chain php artisan news:pipeline --skip-scrape` y comparar
-> `Event::count()` contra `Article::count()`.
+> **Arreglo aplicado (las dos salidas, sin bajar el umbral de título):**
+>
+> - `EntityNormalizer::matches()` acepta que una mención sea **subconjunto estricto** de otra, con
+>   dos guardas contra falsos positivos: una lista de términos genéricos (`banco`, `ministerio`,
+>   `fiscalia`, `corte`…) que no identifican por sí solos, y un mínimo de 4 caracteres, para que
+>   `banco` no se una a `banco central` ni una sigla corta arrastre entidades ajenas.
+> - `sharedEntities()` devuelve siempre la **variante más específica**, así el acontecimiento
+>   guarda `pedro pablo larrain` y no el apellido suelto.
+> - `ArticleClusterer` usa esa comparación en lugar de `array_intersect`, y el conteo por cluster
+>   colapsa las variantes contando **por artículo distinto** (dos formas del mismo nombre dentro de
+>   una misma nota no inflan el conteo).
+> - `clustering.shared_entities_minimum` de `2` a `1`. **`title_similarity` se queda en 0,62.**
+>
+> `canonical()` no se tocó a propósito: lo consume también `AnalyzeArticleJob` para crear las filas
+> de `entities`, y cambiarlo habría reescrito nombres ya persistidos. La laxitud vive solo en la
+> comparación.
+>
+> Cubierto en `tests/Unit/ArticleClusteringEngineTest.php`: el caso Sartor agrupa, el contra-caso
+> genérico sigue separado, y ni la ventana temporal ni la categoría ceden ante una entidad que
+> coincide.
+>
+> **Falta la validación contra datos reales**, que es la prueba que importa: reiniciar a `pending`
+> los artículos de una fuente, correr `NEWS_AI_DRIVER=chain php artisan news:pipeline --skip-scrape`
+> y comparar `Event::count()` contra `Article::count()`. Antes daba 18 y 18 (cero agrupación).
 
 > **Decisión abierta — artículos que llegan tarde.** Solo se agrupan artículos con `event_id` nulo, y un grupo con un miembro nuevo tiene otro `cluster_key`. Consecuencia: si un medio publica su versión de una historia después de que el acontecimiento ya se creó, se abre un **segundo** acontecimiento sobre el mismo hecho en vez de sumarse al primero. Eso choca de frente con el punto 3 del alcance del MVP ("agrupación de artículos que hablan del mismo acontecimiento"), que es lo que justifica el producto. La alternativa —reutilizar el acontecimiento al que ya pertenece algún miembro— cuesta la inmutabilidad que hoy hace al job seguro ante concurrencia. Hay que elegir.
 
@@ -269,12 +304,13 @@ Migraciones en orden de dependencia:
 - [x] Cobertura de tests: parseo del LLM (JSON válido, inválido, campos faltantes), clustering, deduplicación por `url_hash`, orden del briefing, smoke de las 6 rutas y el pipeline completo. Ninguno toca la red.
 - [ ] Estados vacíos y de error en la UI (sin briefing aún, fuente caída, análisis fallido). *(los tres primeros hechos)*
 - [x] Seeder de demo (`DemoSeeder`) con un par de briefings realistas, por si el scraping falla en vivo durante la presentación. **Plan B obligatorio.** Adelantado a la Semana 1: 13 acontecimientos, 5 ediciones y 6 instrumentos, con fechas relativas a hoy.
-- [ ] `vendor/bin/pint` sobre todo el proyecto.
-- [ ] README actualizado: instalación, configuración de la IA, cómo correr el pipeline a mano.
+- [x] `vendor/bin/pint` sobre todo el proyecto — `--test` pasa limpio.
+- [x] README actualizado: instalación (con tabla de diagnóstico), configuración de la IA, cadena de respaldo, OpenRouter, Ollama, cómo correr el pipeline a mano, arañas, rutas y tests.
 - [x] Resuelto el tema del proveedor de IA: **no hay requisito de Gemini**. La capa admite Ollama local y OpenRouter (modelos gratuitos), y encadena ambos. Agregar un `GeminiAnalyzer` seguiría siendo una clase más si alguna vez hace falta.
 - [x] Validada la cadena con una API key real de OpenRouter, sobre 18 artículos chilenos reales (2026-08-13). **Los tres modelos rotaron solos**: `gemma` 15, `gpt-oss` 2, `nemotron` 1 — gemma agotó su cuota gratuita y el respaldo entró sin intervención. Ollama falló las 18 veces (no está instalado) y el cortocircuito lo fue salteando. ~19 s por artículo, 18 de 18 analizados.
 - [x] Calidad del análisis confirmada: con el analizador falso todo caía en `economy`; con modelos reales las categorías salen variadas y correctas (`regulation`, `companies`, `markets`, `monetary`, `commodities`) y las entidades bien extraídas.
-- [ ] **Arreglar la deduplicación entre medios** — ver el bloque rojo de §4.2. Es lo que la validación con IA real dejó al descubierto y es el corazón del MVP.
+- [x] **Arreglar la deduplicación entre medios** — coincidencia por subconjunto de tokens en `EntityNormalizer` (con guardas para genéricos y siglas cortas) y `shared_entities_minimum` a 1, sin bajar el umbral de título. Ver §4.2. **Falta comprobarlo contra los datos reales**, que es el ítem de abajo.
+- [ ] Rehacer la medición de los 18 artículos con el arreglo puesto: `Event::count()` tiene que bajar de 18 y el caso Sartor quedar en un solo acontecimiento con dos fuentes.
 - [ ] Reanalizar los 25 artículos de BBC, que todavía tienen análisis del modelo falso (~8 min y consume cuota gratuita).
 - [ ] Guion de la demo: mostrar briefing → abrir un evento con 2+ fuentes → mostrar el enlace original → gráficos de mercado.
 

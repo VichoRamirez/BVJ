@@ -20,6 +20,19 @@ use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
+/*
+ * El reloj va congelado para todo el archivo.
+ *
+ * `clusterArticle()` fija `published_at` a una fecha literal, y la ventana de
+ * agrupación se mide contra el cutoff del job. Los tests que no pasan un cutoff
+ * explícito caen en `now()`, así que sin congelar el reloj dejan de agrupar en
+ * cuanto la hora real se aleja 24 h de esa fecha: pasan hoy y fallan mañana
+ * solos. La hora elegida es la misma que usan de cutoff los demás tests.
+ */
+beforeEach(function (): void {
+    $this->travelTo(CarbonImmutable::parse('2026-08-12 13:00:00'));
+});
+
 function clusterArticle(array $attributes = [], array $analysis = [], array $entities = [], array $tags = []): Article
 {
     $article = Article::factory()->create(array_merge([

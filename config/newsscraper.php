@@ -1,7 +1,7 @@
 <?php
 
 declare(strict_types=1);
-use App\Spiders\BbcMundoEconomiaSpider;
+use App\Spiders\BbcBusinessSpider;
 use App\Spiders\DiarioFinancieroSpider;
 use App\Spiders\PulsoSpider;
 
@@ -142,8 +142,19 @@ return [
 
     'clustering' => [
         'window_hours' => (int) env('NEWS_CLUSTER_WINDOW', 24),
+
+        /*
+        | El umbral de título se mantiene alto a propósito. Medido sobre 18
+        | artículos reales, dos medios que cubren el mismo hecho comparten muy
+        | poco vocabulario: el caso Sartor dio 0,25. Bajarlo hasta ahí agrupaba
+        | ese caso, pero a ese nivel también se fusionan hechos distintos que
+        | solo comparten jerga financiera.
+        |
+        | La señal buena son las entidades, así que manda una sola compartida y
+        | el título queda como refuerzo, no como requisito.
+        */
         'title_similarity' => (float) env('NEWS_CLUSTER_THRESHOLD', 0.62),
-        'shared_entities_minimum' => 2,
+        'shared_entities_minimum' => 1,
         'max_articles' => (int) env('NEWS_CLUSTER_MAX_ARTICLES', 500),
         'job_timeout' => (int) env('NEWS_CLUSTER_JOB_TIMEOUT', 120),
     ],
@@ -247,6 +258,21 @@ return [
         'max_excerpt_chars' => (int) env('NEWS_MAX_EXCERPT_CHARS', 600),
 
         /*
+        | Abrir cada nota para leer su fecha y su autor.
+        |
+        | Los listados chilenos casi no publican fecha (medido el 2026-08-13:
+        | Diario Financiero 12 de 103 tarjetas, Pulso 0 de 77), y sin fecha real
+        | todos los artículos de una corrida quedan con el mismo instante, que es
+        | la hora del scrape. La agrupación y el corte del briefing se miden
+        | contra `published_at`, así que la fecha no es cosmética.
+        |
+        | Solo lo usan las arañas HTML; las de RSS ya reciben `pubDate`. Cuesta
+        | un request extra por artículo, con el mismo retardo y robots.txt de
+        | siempre. Apagarlo devuelve el comportamiento anterior.
+        */
+        'fetch_article_metadata' => filter_var(env('NEWS_SCRAPE_FETCH_METADATA', true), FILTER_VALIDATE_BOOLEAN),
+
+        /*
         | Allowlist de hosts. SafeHttpFetcher no sale a ningún dominio que no
         | esté acá, y revalida cada redirección contra la misma lista: una
         | fuente comprometida no puede empujar al bot hacia otro sitio ni hacia
@@ -264,7 +290,7 @@ return [
         | resolver solo acepta las de esta lista.
         */
         'spiders' => [
-            BbcMundoEconomiaSpider::class,
+            BbcBusinessSpider::class,
             DiarioFinancieroSpider::class,
             PulsoSpider::class,
         ],

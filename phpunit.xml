@@ -32,5 +32,13 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!--
+            Fijado a propósito: sin esto la suite hereda el .env de cada quien y
+            GenerateBriefingJob lanza InvalidArgumentException si el valor no es
+            un caso de RelevanceLevel. Un .env viejo con "media" (el enum pasó a
+            inglés) tumbaba diez tests en la máquina de un integrante y en
+            ninguna otra.
+        -->
+        <env name="NEWS_MIN_RELEVANCE" value="medium"/>
     </php>
 </phpunit>

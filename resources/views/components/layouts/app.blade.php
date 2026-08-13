@@ -8,6 +8,9 @@
 
     <title>{{ $title ?? 'Briefing financiero' }} · {{ config('app.name') }}</title>
 
+    {{-- Archivo se sirve desde Bunny (ver vite.config.js). Sin esta directiva el
+         manifiesto de fuentes nunca se emite y toda la app cae al fallback. --}}
+    @fonts
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="min-h-dvh flex flex-col bg-paper text-ink antialiased">

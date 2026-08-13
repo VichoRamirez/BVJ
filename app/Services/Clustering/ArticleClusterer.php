@@ -72,7 +72,10 @@ final class ArticleClusterer
                 $tokenUnion = array_values(array_unique([...$leftTokens, ...$rightTokens]));
                 $tokenIntersection = array_intersect($leftTokens, $rightTokens);
                 $jaccard = count($tokenUnion) === 0 ? 0.0 : count($tokenIntersection) / count($tokenUnion);
-                $sharedEntities = array_intersect($entities[$left], $entities[$right]);
+                // Coincidencia laxa, no array_intersect: dos medios escriben
+                // "larrain" y "pedro pablo larrain" para la misma persona, y la
+                // igualdad exacta dejaba el mismo hecho como dos acontecimientos.
+                $sharedEntities = $this->entityNormalizer->sharedEntities($entities[$left], $entities[$right]);
 
                 if ($jaccard >= $options->tokenJaccardThreshold || count($sharedEntities) >= $options->minimumSharedEntities) {
                     $edges[] = [$left, $right, $jaccard, count($sharedEntities)];
@@ -93,16 +96,7 @@ final class ArticleClusterer
 
         $clusters = array_map(function (array $members): ArticleCluster {
             usort($members, static fn (ClusterableArticleData $left, ClusterableArticleData $right): int => strcmp($left->id, $right->id));
-            $entityCounts = [];
-            foreach ($members as $member) {
-                foreach ($this->entityNormalizer->canonicalize($member->entities) as $entity) {
-                    $entityCounts[$entity] = ($entityCounts[$entity] ?? 0) + 1;
-                }
-            }
-            $canonicalEntities = array_keys($entityCounts);
-            sort($canonicalEntities);
-            $sharedEntities = array_keys(array_filter($entityCounts, static fn (int $count): bool => $count >= 2));
-            sort($sharedEntities);
+            ['canonical' => $canonicalEntities, 'shared' => $sharedEntities] = $this->groupMemberEntities($members);
             $representative = $members[0];
             foreach (array_slice($members, 1) as $member) {
                 if ($member->relevance->weight() > $representative->relevance->weight()
@@ -119,5 +113,58 @@ final class ArticleClusterer
         usort($clusters, static fn (ArticleCluster $left, ArticleCluster $right): int => strcmp($left->members[0]->id, $right->members[0]->id));
 
         return $clusters;
+    }
+
+    /**
+     * Agrupa las menciones de los miembros colapsando las variantes del mismo
+     * nombre, y devuelve la unión y las que aparecen en 2+ artículos.
+     *
+     * Va por `matches()` y no por igualdad de clave: si "larrain" y "pedro pablo
+     * larrain" contaran por separado, el cluster quedaría con dos entidades de
+     * un artículo cada una y `shared` saldría vacío aunque los artículos ya
+     * estén agrupados. Se cuenta por artículo distinto, así que dos variantes
+     * dentro de la misma nota no inflan el conteo.
+     *
+     * @param  list<ClusterableArticleData>  $members
+     * @return array{canonical: list<string>, shared: list<string>}
+     */
+    private function groupMemberEntities(array $members): array
+    {
+        /** @var list<array{name: string, members: array<int, true>}> $groups */
+        $groups = [];
+
+        foreach ($members as $memberIndex => $member) {
+            foreach ($this->entityNormalizer->canonicalize($member->entities) as $entity) {
+                $matched = null;
+
+                foreach ($groups as $groupIndex => $group) {
+                    if ($this->entityNormalizer->matches($group['name'], $entity)) {
+                        $matched = $groupIndex;
+                        break;
+                    }
+                }
+
+                if ($matched === null) {
+                    $groups[] = ['name' => $entity, 'members' => [$memberIndex => true]];
+
+                    continue;
+                }
+
+                $groups[$matched]['name'] = $this->entityNormalizer->mostSpecific($groups[$matched]['name'], $entity);
+                $groups[$matched]['members'][$memberIndex] = true;
+            }
+        }
+
+        $canonical = array_map(static fn (array $group): string => $group['name'], $groups);
+        sort($canonical);
+
+        $shared = array_map(
+            static fn (array $group): string => $group['name'],
+            array_filter($groups, static fn (array $group): bool => count($group['members']) >= 2),
+        );
+        $shared = array_values($shared);
+        sort($shared);
+
+        return ['canonical' => $canonical, 'shared' => $shared];
     }
 }

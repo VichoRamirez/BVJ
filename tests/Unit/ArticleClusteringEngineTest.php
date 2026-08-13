@@ -108,6 +108,82 @@ test('caps source bonus and applies the complete selector tie-break', function (
         ->and((new BriefingSelector)->select($tieClusters)[0]->members[0]->id)->toBe('a');
 });
 
+test('matches entity mentions that are a subset of a fuller name', function () {
+    $normalizer = new EntityNormalizer;
+
+    expect($normalizer->matches('Larraín', 'Pedro Pablo Larraín'))->toBeTrue()
+        ->and($normalizer->matches('Codelco', 'Codelco'))->toBeTrue()
+        ->and($normalizer->mostSpecific('larrain', 'pedro pablo larrain'))->toBe('pedro pablo larrain')
+        ->and($normalizer->sharedEntities(['Larraín', 'Codelco'], ['Pedro Pablo Larraín']))->toBe(['pedro pablo larrain']);
+});
+
+test('does not match on generic or too short mentions', function () {
+    $normalizer = new EntityNormalizer;
+
+    expect($normalizer->matches('Banco', 'Banco Central'))->toBeFalse()
+        ->and($normalizer->matches('Ministerio', 'Ministerio de Hacienda'))->toBeFalse()
+        ->and($normalizer->matches('Corte', 'Corte Suprema'))->toBeFalse()
+        // Conservador a propósito: una sigla de menos de 4 letras no une por sí
+        // sola. Si los dos medios la escriben igual, la igualdad exacta ya basta.
+        ->and($normalizer->matches('BHP', 'BHP Billiton'))->toBeFalse()
+        ->and($normalizer->sharedEntities(['Banco'], ['Banco Central']))->toBe([]);
+});
+
+/*
+ * El caso que la validación con datos reales dejó al descubierto: Diario
+ * Financiero y Pulso cubrieron la misma jornada del caso Sartor y quedaban como
+ * dos acontecimientos, porque un medio escribió "Larraín" y el otro el nombre
+ * completo. Los títulos comparten muy poco (Jaccard 0,25), así que quien tiene
+ * que unirlos son las entidades.
+ */
+test('clusters the same fact across outlets when only the entity name varies', function () {
+    $clusters = (new ArticleClusterer)->cluster([
+        article('df', 'Formalización del caso Sartor: Fiscalía responde a defensas', source: 'diario-financiero', entities: ['Larraín']),
+        article('pulso', 'Caso Sartor: Fiscalía cuestiona defensa de imputados', source: 'pulso', hours: 1, entities: ['Pedro Pablo Larraín']),
+    ]);
+
+    expect($clusters)->toHaveCount(1)
+        ->and($clusters[0]->members)->toHaveCount(2)
+        ->and($clusters[0]->distinctSourceCount)->toBe(2)
+        // Se queda con el nombre completo, no con el apellido suelto.
+        ->and($clusters[0]->sharedEntities)->toBe(['pedro pablo larrain'])
+        ->and($clusters[0]->canonicalEntities)->toBe(['pedro pablo larrain']);
+});
+
+test('keeps unrelated facts apart when the shared mention is generic', function () {
+    $clusters = (new ArticleClusterer)->cluster([
+        article('a', 'Reforma previsional avanza en el Senado', source: 'one', entities: ['Banco']),
+        article('b', 'Cobre cierra al alza en Londres', source: 'two', hours: 1, entities: ['Banco Central']),
+    ]);
+
+    expect($clusters)->toHaveCount(2);
+});
+
+test('does not let a matching entity override window or category', function () {
+    $outsideWindow = (new ArticleClusterer)->cluster([
+        article('a', 'Formalización del caso Sartor', hours: 0, entities: ['Larraín']),
+        article('b', 'Otra jornada del caso', hours: 30, entities: ['Pedro Pablo Larraín']),
+    ]);
+    $otherCategory = (new ArticleClusterer)->cluster([
+        article('a', 'Formalización del caso Sartor', hours: 0, entities: ['Larraín']),
+        article('b', 'Otra jornada del caso', hours: 1, category: NewsCategory::Markets, entities: ['Pedro Pablo Larraín']),
+    ]);
+
+    expect($outsideWindow)->toHaveCount(2)
+        ->and($otherCategory)->toHaveCount(2);
+});
+
+test('counts a shared entity once per article, not per mention', function () {
+    $cluster = (new ArticleClusterer)->cluster([
+        // El mismo artículo nombra a la persona de dos formas; no puede contar
+        // como si dos medios distintos la hubieran mencionado.
+        article('a', 'Título sin relación alguna', source: 'one', entities: ['Larraín', 'Pedro Pablo Larraín']),
+    ])[0];
+
+    expect($cluster->canonicalEntities)->toBe(['pedro pablo larrain'])
+        ->and($cluster->sharedEntities)->toBe([]);
+});
+
 test('returns empty and rejects invalid DTOs and options', function () {
     expect((new ArticleClusterer)->cluster([]))->toBe([])
         ->and(fn () => new ClusterableArticleData('', 'x', new DateTimeImmutable, NewsCategory::Economy, RelevanceLevel::Low, [], 's'))->toThrow(InvalidArgumentException::class)

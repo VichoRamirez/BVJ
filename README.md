@@ -315,7 +315,15 @@ externas. Mientras no exista el pipeline, los datos los pone `DemoSeeder`.
 
 `/?vacio=1` fuerza el estado "todavía no hay briefing", útil para revisar ese caso en diseño.
 
-El sistema de diseño y las decisiones de interfaz están en `AUDITORIA-UI.md`.
+## Documentación
+
+| Archivo | Para qué |
+|---|---|
+| `README.md` | Instalar y usar (este archivo) |
+| `ARQUITECTURA.md` | Qué es cada carpeta y cada archivo, el esquema de la base, cómo funciona cada feature |
+| `PLAN.md` | Plan de implementación, estado y pendientes |
+| `AUDITORIA-UI.md` | Sistema de diseño y decisiones de interfaz |
+| `CLAUDE.md` | Contexto, decisiones técnicas y reglas de trabajo del equipo |
 
 ## Tests
 

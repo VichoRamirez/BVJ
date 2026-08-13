@@ -2,6 +2,8 @@
 
 namespace App\Support;
 
+use App\Exceptions\InvalidArticleUrlException;
+
 /**
  * Normalización de URLs de artículos.
  *
@@ -38,10 +40,11 @@ final class CanonicalUrl
 
     public static function normalize(string $url): string
     {
-        $parts = parse_url(trim($url));
+        $url = trim($url);
+        $parts = parse_url($url);
 
-        if ($parts === false || ! isset($parts['host'])) {
-            return trim($url);
+        if ($parts === false || ! in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true) || empty($parts['host']) || array_key_exists('user', $parts) || array_key_exists('pass', $parts)) {
+            throw new InvalidArticleUrlException('La URL del artículo debe usar HTTP o HTTPS, tener un host válido y no incluir credenciales.');
         }
 
         $scheme = strtolower($parts['scheme'] ?? 'https');

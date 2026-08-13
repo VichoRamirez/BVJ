@@ -31,6 +31,7 @@ class AnalysisResponseParser
             throw new AnalysisResponseTooLargeException($this->limits->response);
         }
 
+        $rawResponse = $response;
         $response = $this->removeMarkdownFence($response);
 
         try {
@@ -92,7 +93,10 @@ class AnalysisResponseParser
             provider: $this->provider,
             model: $this->model,
             schemaVersion: $this->schemaVersion,
-            rawResponse: $payload,
+            rawResponse: [
+                'content' => $rawResponse,
+                'payload' => $payload,
+            ],
         );
     }
 

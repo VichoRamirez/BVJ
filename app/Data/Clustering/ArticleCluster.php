@@ -22,5 +22,6 @@ readonly class ArticleCluster
         public DateTimeImmutable $latestPublishedAt,
         public array $canonicalEntities,
         public array $sharedEntities,
+        public string $representativeId,
     ) {}
 }

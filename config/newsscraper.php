@@ -41,6 +41,15 @@ return [
             'retry_backoff' => (int) env('NEWS_OLLAMA_RETRY_BACKOFF', 100),
             'max_response_bytes' => (int) env('NEWS_OLLAMA_MAX_RESPONSE_BYTES', 1_048_576),
         ],
+
+        'job_tries' => (int) env('NEWS_AI_JOB_TRIES', 4),
+        'job_timeout' => (int) env('NEWS_AI_JOB_TIMEOUT', 180),
+        'overlap_release_after' => (int) env('NEWS_AI_OVERLAP_RELEASE_AFTER', 30),
+        'processing_stale_after' => (int) env('NEWS_AI_PROCESSING_STALE_AFTER', 300),
+        'overlap_ttl' => max(
+            (int) env('NEWS_AI_OVERLAP_TTL', 240),
+            (int) env('NEWS_AI_JOB_TIMEOUT', 180) + 31,
+        ),
     ],
 
     /*
@@ -72,6 +81,8 @@ return [
         'window_hours' => (int) env('NEWS_CLUSTER_WINDOW', 24),
         'title_similarity' => (float) env('NEWS_CLUSTER_THRESHOLD', 0.62),
         'shared_entities_minimum' => 2,
+        'max_articles' => (int) env('NEWS_CLUSTER_MAX_ARTICLES', 500),
+        'job_timeout' => (int) env('NEWS_CLUSTER_JOB_TIMEOUT', 120),
     ],
 
     /*

@@ -26,6 +26,7 @@ use Illuminate\Support\Collection;
  */
 #[Fillable([
     'slug',
+    'cluster_key',
     'title',
     'summary',
     'importance',

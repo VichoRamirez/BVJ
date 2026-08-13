@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Contracts\NewsAnalyzer;
 use App\Services\Ai\FakeNewsAnalyzer;
+use App\Services\Ai\OllamaAnalyzer;
 use Illuminate\Support\ServiceProvider;
 use LogicException;
 
@@ -19,6 +20,10 @@ class AppServiceProvider extends ServiceProvider
 
             if ($driver === 'fake' && app()->environment(['local', 'testing'])) {
                 return new FakeNewsAnalyzer;
+            }
+
+            if ($driver === 'ollama') {
+                return app(OllamaAnalyzer::class);
             }
 
             throw new LogicException(

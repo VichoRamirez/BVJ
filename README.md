@@ -19,7 +19,7 @@ Inspirado en [Agentes_de_Coyuntura](https://github.com/DataMarketAnalysisClub/Ag
 - PHP >= 8.3
 - Composer
 - Node.js + npm
-- Acceso a una API de Ollama (local o [ollama.com](https://ollama.com))
+- Ollama local ejecutándose en `http://127.0.0.1:11434`
 
 ## Instalación
 
@@ -41,13 +41,20 @@ Alternativamente, `composer run setup` ejecuta estos pasos automáticamente.
 
 ### Configuración de Ollama
 
-En `.env`, define las credenciales del modelo:
+La integración usa únicamente Ollama local. En `.env`, configura el driver y un modelo instalado localmente:
 
 ```
-OLLAMA_API_KEY=tu-api-key
-OLLAMA_MODEL=gpt-oss:20b-cloud
-OLLAMA_API_URL=https://ollama.com/api/chat
+NEWS_AI_DRIVER=ollama
+NEWS_OLLAMA_BASE_URL=http://127.0.0.1:11434
+NEWS_OLLAMA_MODEL=llama3.2:3b
+NEWS_OLLAMA_CONNECT_TIMEOUT=3
+NEWS_OLLAMA_TIMEOUT=60
+NEWS_OLLAMA_RETRY_ATTEMPTS=2
+NEWS_OLLAMA_RETRY_BACKOFF=100
+NEWS_OLLAMA_MAX_RESPONSE_BYTES=1048576
 ```
+
+La URL debe usar HTTP, un literal IP loopback (`127.0.0.1` o `[::1]`) y un puerto explícito.
 
 ## Desarrollo
 

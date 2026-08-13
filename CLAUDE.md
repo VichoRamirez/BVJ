@@ -189,7 +189,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Backend | Laravel 13 + PHP (composer pide `^8.3`; el entorno local es PHP 8.3.6, **no 8.5** — no uses sintaxis de 8.4/8.5) |
 | Base de datos | SQLite (`database/database.sqlite`) |
 | Scraping | [Roach PHP](https://roach-php.dev/docs/introduction) |
-| LLM | Ollama Cloud vía HTTP (`OLLAMA_API_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`) |
+| LLM | Ollama local vía HTTP en `127.0.0.1` o `[::1]` (`NEWS_OLLAMA_BASE_URL`, `NEWS_OLLAMA_MODEL`) |
 | Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
 | Gráficos | [LaravelDaily/laravel-charts](https://github.com/LaravelDaily/laravel-charts) |
 | Frontend | Blade + Tailwind CSS 4 + Vite (sin SPA, sin framework JS) |
@@ -197,7 +197,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Tests | Pest 5 |
 | Formato | Laravel Pint |
 
-**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. Driver por defecto: Ollama. Antes de la entrega hay que confirmar con el profesor cuál corre en la demo.
+**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama local y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. El driver Ollama actual solo permite URLs HTTP loopback; no hay soporte cloud ni API keys.
 
 ## 4. Reglas de trabajo
 

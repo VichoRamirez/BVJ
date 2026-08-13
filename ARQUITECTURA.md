@@ -3,7 +3,7 @@
 Documento de referencia técnica: qué hay, dónde está y por qué. No explica cómo usar la app
 (eso es el `README.md`) ni qué falta por hacer (eso es `PLAN.md`).
 
-Estado al 2026-08-13, rama `feature/ai-fallback`. 259 tests, 542 assertions.
+Estado al 2026-08-13, rama `main`. 279 tests, 595 assertions, toda la suite en verde.
 
 **Cómo está organizado.** Las secciones 1–11 son el mapa general: qué carpeta hace qué, el
 esquema de la base, qué archivos participan en cada feature. Los **anexos A–G** desarman cada
@@ -54,7 +54,7 @@ solo lee lo que el pipeline ya escribió.
                          ┌──────────────── PIPELINE (consola / scheduler) ────────────────┐
                          │                                                               │
   Fuentes web  ──────────┤  ScrapeSourceJob ─→ Article                                   │
-  (df.cl, pulso, BBC)    │        │                                                      │
+  (df.cl, pulso, bbc)    │        │                                                      │
                          │        ↓                                                      │
   Ollama / OpenRouter ───┤  AnalyzeArticleJob ─→ Analysis + Entity + Tag                 │
                          │        │                                                      │
@@ -208,7 +208,7 @@ Dos detalles con consecuencias:
 |---|---|
 | `ArticleClusterer.php` | El motor. Union-find sobre aristas ordenadas por fuerza. **No toca la base de datos** |
 | `TitleNormalizer.php` | Título → tokens sin tildes, sin stopwords, únicos |
-| `EntityNormalizer.php` | Nombre → forma canónica; quita sufijos societarios (S.A., Ltda., Inc.) |
+| `EntityNormalizer.php` | Nombre → forma canónica (quita S.A., Ltda., Inc.) **y coincidencia laxa**: `matches()`, `sharedEntities()`, `mostSpecific()` |
 | `BriefingScorer.php` | Cluster → puntaje |
 | `BriefingSelector.php` | Ordena y corta en N |
 
@@ -239,20 +239,64 @@ oportunidad de olvidar `robots.txt` o el retardo.
 |---|---|---|
 | `RssSpider.php` | abstracta | Base para feeds |
 | `HtmlListingSpider.php` | abstracta | Base para portadas de sección |
-| `BbcMundoEconomiaSpider.php` | RSS | BBC News Mundo · Economía |
+| `BbcBusinessSpider.php` | RSS | BBC News · Business (`feeds.bbci.co.uk/news/business`) |
 | `DiarioFinancieroSpider.php` | HTML | df.cl/mercados |
 | `PulsoSpider.php` | HTML | latercera.com/canal/pulso |
 
 Una araña concreta son **~20 líneas de selectores**. Toda la lógica —saneado de HTML, URLs
-relativas, descarte de items rotos, deduplicación dentro del listado— vive en la base.
+relativas, descarte de items rotos, deduplicación dentro del listado, enriquecimiento de
+metadatos— vive en la base.
 
-**Ninguna abre la nota.** Se quedan con lo que el medio ya expone públicamente (titular, enlace,
-bajada, fecha). Eso resuelve tres problemas de una: no se topa con paywalls, no se almacena
-cuerpo con copyright, y es un solo request por corrida.
+**`BbcBusinessSpider` reemplazó a `BbcMundoEconomiaSpider`.** El feed de BBC Mundo Economía no
+era de economía: `feeds.bbci.co.uk/mundo/economia/rss.xml` devuelve el feed general de BBC Mundo
+—su `<title>` es "BBC Mundo"— y entregaba terremotos y eclipses dentro de un briefing financiero.
+La contrapartida es que el nuevo feed publica **en inglés y con foco en Reino Unido**: el análisis
+se pide en español, así que el resumen sale traducido, pero la cobertura no es chilena. Sirve de
+contraste y para que el pipeline nunca se quede sin material; las fuentes del MVP son las locales.
+
+**Del listado no sale la fecha, y por eso las arañas HTML sí abren la nota** — solo para leer
+`article:published_time` / JSON-LD y el autor. Nunca se guarda el cuerpo. Ver §4.6.1.
 
 `articlePathPattern()` es obligatorio en las HTML: los listados mezclan periodismo con
 **publirreportajes, contenido *branded* y videos**. Publicar publicidad pagada dentro del
 briefing, resumida por IA y presentada como noticia, engañaría al lector.
+
+#### 4.6.1 El enriquecimiento de metadatos
+
+Los listados chilenos casi no publican fecha. **Medido el 2026-08-13: Diario Financiero la trae
+en 12 de 103 tarjetas, Pulso en 0 de 77.** Sin fecha real, `ScrapeSourceJob` cae a la hora del
+scrape y **todos los artículos de una corrida quedan con el mismo instante**. Eso no es cosmético:
+la ventana de agrupación y el corte del briefing se miden contra `published_at`.
+
+La nota sí la trae. `HtmlListingSpider::enrich()` abre cada artículo —**después** de aplicar el
+tope de la corrida, para no gastar requests en tarjetas que se van a descartar— y lee únicamente:
+
+| Dato | De dónde |
+|---|---|
+| Fecha | `meta[property="article:published_time"]` → `meta[itemprop="datePublished"]` → JSON-LD `datePublished` |
+| Autor | `meta[name="author"]` → JSON-LD `author.name` |
+
+El JSON-LD se recorre **decodificado, no con expresión regular**: los medios anidan el artículo
+dentro de `@graph` y `author` puede ser objeto, lista de objetos o cadena suelta.
+
+Tres garantías:
+
+- **Nunca descarta.** Si la nota no responde, cambia el marcado o hay paywall, se devuelve el
+  artículo tal como venía del listado. Perder la hora exacta es aceptable; perder el artículo, no.
+- **La bajada sigue siendo la del listado.** El cuerpo con copyright no se guarda nunca
+  (`CLAUDE.md §4`).
+- **Sale por `SafeHttpFetcher`**, con el mismo retardo, allowlist y `robots.txt`.
+
+Cuesta un request por artículo. Se apaga con `NEWS_SCRAPE_FETCH_METADATA=false`, y en ese caso las
+fechas vuelven a caer a la hora del scrape. Solo afecta a las arañas HTML: las de RSS ya reciben
+`pubDate`.
+
+> **Resultado en la base actual: 59 de 59 artículos con `published_at` distinto de `scraped_at`**,
+> en las tres fuentes activas.
+
+Un detalle emparentado en `parseDate()`: los formatos llevan `!` al inicio (`'!d/m/Y'`). Sin él,
+`createFromFormat` rellena los campos que el formato no trae con la **hora actual**, así que
+"13/08/2026" quedaba como la hora del scrape en vez del comienzo del día.
 
 ### 4.7 `app/Jobs/` — las cinco etapas
 
@@ -287,7 +331,16 @@ Permite reconstruir a mano la edición de ayer si el scheduler no corrió.
 |---|---|
 | `news:pipeline {--edition=} {--spider=} {--skip-scrape} {--skip-markets}` | Las 5 etapas en orden |
 | `news:scrape {--source=} {--spider=} {--sync}` | Solo recolección |
+| `news:analyze {--source=} {--retry-failed} {--only-failed} {--limit=}` | Solo análisis, y la única forma de recuperar un `failed` |
 | `news:markets {--queue}` | Solo cotizaciones |
+
+**`news:analyze` existe porque un análisis fallido quedaba muerto.** `news:pipeline` solo toma los
+artículos en `pending`, y `ScrapeSourceJob` tampoco reencola: al re-scrapear, un artículo que ya
+existe y no está `pending` se salta a propósito, para no repetir llamadas que ya se pagaron. La
+consecuencia era que un `failed` —una respuesta que no cumplió el esquema, un timeout que agotó
+los reintentos— no tenía manera de volver al pipeline. `--retry-failed` los devuelve a `pending`
+antes de despachar; `--limit` acota el gasto, que con modelos gratuitos de cuota baja importa.
+Un artículo que explota no tumba el lote: se cuenta aparte y la corrida sigue.
 
 `news:pipeline` corre las etapas **en orden y en su propio proceso**, no repartidas en la cola.
 Es deliberado: agrupar antes de que terminen los análisis produciría acontecimientos incompletos.
@@ -394,8 +447,17 @@ market_snapshots  (sin relaciones)
 
 | Seeder | Qué siembra |
 |---|---|
-| `SourceSeeder` | Las 6 fuentes. **Solo activa las que tienen araña**; el resto queda inactiva con el motivo escrito |
+| `SourceSeeder` | Las 6 fuentes. **Solo activa las que tienen araña** (bbc-business, diario-financiero, pulso); el resto queda inactiva con el motivo escrito |
 | `DemoSeeder` | Plan B de la demo: 13 acontecimientos, 5 ediciones, 6 instrumentos, con fechas relativas a hoy. Idempotente |
+
+**`DatabaseSeeder` ya no llama a `DemoSeeder`.** Mientras lo hacía, un `migrate:fresh --seed`
+llenaba la base de acontecimientos inventados y en la portada era imposible distinguir qué venía
+del scraping real y qué era relleno. Ahora `--seed` siembra **solo las fuentes**; la demo se corre
+a mano cuando se la necesita:
+
+```bash
+php artisan db:seed --class=DemoSeeder
+```
 
 ---
 
@@ -420,7 +482,7 @@ de aplicación**. Los gráficos son SVG generado en el servidor.
 
 | Componente | Qué muestra |
 |---|---|
-| `layouts/app` | Layout: skip link, `<main>`, nav de escritorio + menú `<details>` en móvil |
+| `layouts/app` | Layout: skip link, `<main>`, nav de escritorio + menú `<details>` en móvil, `@fonts` + `@vite` |
 | `event-card`, `event-list` | Tarjeta de acontecimiento y su listado |
 | `briefing-header` | Cabecera de edición con fecha y AM/PM |
 | `relevance-badge` | 4 cuadrados **más etiqueta de texto** |
@@ -445,6 +507,9 @@ decisiones y su justificación están en `AUDITORIA-UI.md`. Lo esencial:
   texto), `--color-accent-strong` (texto pequeño, 6,41:1).
 - `--color-positive` / `--color-negative` para variaciones de mercado, separados del acento de
   marca: en un producto financiero, un rojo único es ambiguo.
+- **La tipografía Archivo se sirve desde Bunny** (ver `vite.config.js`) y necesita la directiva
+  `@fonts` en el layout. Sin ella el manifiesto de fuentes nunca se emite y toda la aplicación cae
+  al fallback del sistema. Antes solo la emitía un `welcome.blade.php` que se eliminó.
 
 ---
 
@@ -472,6 +537,9 @@ php artisan news:scrape --sync
 php artisan news:scrape --source=pulso --sync
 ```
 
+**Estado real:** 59 artículos recolectados de las tres fuentes activas — bbc-business 25,
+pulso 23, diario-financiero 11 — todos con fecha de publicación real.
+
 **Cómo falla:** por fuente y aislado. `failure_count++`, motivo en `last_failure_reason`, el lote
 sigue. El aviso lo muestra `<x-source-status>`.
 
@@ -492,14 +560,25 @@ sigue. El aviso lo muestra `<x-source-status>`.
 | `Data/NewsArticleInput.php`, `Data/AnalysisResult.php` | DTOs |
 | `Models/Analysis.php`, `Entity.php`, `Tag.php` | Persistencia |
 
-**Cómo correrla:** es una etapa de `news:pipeline`; no tiene comando propio (pendiente
-`news:analyze`).
+**Cómo correrla:** es una etapa de `news:pipeline`, y además tiene comando propio:
+
+```bash
+php artisan news:analyze --limit=10        # analizar de a poco
+php artisan news:analyze --retry-failed    # recuperar los que fallaron
+```
 
 **La cadena en detalle** (`NEWS_AI_DRIVER=chain`): prueba los eslabones de
 `config('newsscraper.ai.chain')` en orden y usa el primero que responda. Solo cambia de modelo
 ante `AnalyzerUnavailable`. Una respuesta mal formada **no** dispara el salto —es casi siempre el
 prompt, y taparlo lo esconde— salvo `NEWS_AI_FALLBACK_ON_INVALID=true`. Qué modelo respondió
 queda en `analyses.provider` y `analyses.model`.
+
+> **Ojo con esa regla ahora que Ollama está instalado.** Los 45 análisis de la base actual los
+> resolvió `ollama llama3.2:3b`, el primer eslabón. Pero el log acumula **25
+> `AnalysisValidationException`**: un modelo de 3B falla el esquema a menudo, y como el JSON
+> inválido no es indisponibilidad, esos artículos van directo a `failed` **sin llegar a probar
+> OpenRouter**. Hoy hay 13 `failed` por esa vía. Es una decisión abierta, no un bug — ver
+> `PLAN.md §4.1`.
 
 ### Feature 3 — Agrupación
 
@@ -516,9 +595,26 @@ queda en `analyses.provider` y `analyses.model`.
 **Criterio:** misma categoría **y** (similitud de títulos ≥ umbral **o** entidades compartidas ≥
 mínimo), dentro de una ventana temporal.
 
-> ⚠️ **Esta feature no funciona con datos reales.** Medido: dos notas sobre el mismo hecho, de dos
-> medios, quedaron separadas (Jaccard 0,25 vs umbral 0,62; entidades compartidas 0 porque
-> `larrain` y `pedro pablo larrain` no se unen). Diagnóstico completo en `PLAN.md §4.2`.
+**Ya agrupa entre medios.** La versión anterior no lo lograba con datos reales: dos notas sobre el
+mismo hecho quedaban separadas porque un medio escribió `larrain` y el otro `pedro pablo larrain`,
+y `EntityNormalizer` comparaba cadenas exactas. Dos cambios lo resolvieron:
+
+1. **Coincidencia laxa de entidades** (`EntityNormalizer::matches()`): una mención que es
+   subconjunto estricto de otra cuenta como la misma entidad, siempre que aporte al menos un token
+   distintivo. Ver Anexo D.2.
+2. **`shared_entities_minimum` bajó de 2 a 1**, manteniendo el Jaccard de títulos alto (0,62). Las
+   entidades mandan; el título es refuerzo, no requisito.
+
+> **Comprobado en la base actual:** 20 acontecimientos sobre 45 artículos analizados, con un
+> acontecimiento que **une 3 artículos de 2 medios distintos** (Pulso ×2 + Diario Financiero) sobre
+> la venta del 1% de Falabella por las hermanas Cúneo. Es el punto 3 del alcance del MVP,
+> funcionando con datos reales por primera vez.
+
+> ⚠️ **La contrapartida a vigilar: sobre-agrupación.** Con el mínimo en 1, compartir una sola
+> empresa basta. En ese mismo acontecimiento entró una nota sobre la **dotación de Falabella y
+> Cencosud**, que es un hecho distinto que solo comparte la empresa. Los tokens genéricos
+> (`banco`, `ministerio`, `corte`…) están excluidos justamente para acotar esto, pero un nombre
+> propio de empresa grande sigue uniendo mucho. Ver `PLAN.md §4.2`.
 
 ### Feature 4 — Datos de mercado
 
@@ -572,14 +668,23 @@ Requiere `php artisan schedule:work` o el cron equivalente en el servidor.
 
 **Ningún archivo fuera de `config/` llama a `env()`.** Todo se lee con `config()`.
 
-`config/newsscraper.php` tiene cinco bloques: `ai` (drivers, cadena, cortocircuito), `relevance`,
+`config/newsscraper.php` tiene seis bloques: `ai` (drivers, cadena, cortocircuito), `relevance`,
 `clustering`, `briefing`, `markets` (instrumentos y Yahoo) y `scraping` (User-Agent, retardo,
-allowlist de hosts, allowlist de spiders, límites de contenido).
+allowlist de hosts, allowlist de spiders, límites de contenido, enriquecimiento de metadatos).
 
 **Dos allowlists en `scraping`, y las dos importan:**
 - `allowed_hosts` — a qué dominios se puede salir.
 - `spiders` — qué clases puede instanciar el resolver. `spider_class` viene de la base de datos y
   `--spider=` de la consola: ninguno puede terminar ejecutando una clase arbitraria.
+
+**Los valores que más se tocan:**
+
+| Clave | Valor | Por qué ese |
+|---|---|---|
+| `clustering.title_similarity` | `0.62` | Alto a propósito: bajarlo hasta 0,25 agrupaba el caso Sartor pero también fusionaba hechos que solo comparten jerga financiera |
+| `clustering.shared_entities_minimum` | `1` | La señal buena son las entidades, no el título |
+| `scraping.fetch_article_metadata` | `true` | Abrir la nota para leer fecha y autor (§4.6.1). `false` devuelve el comportamiento anterior |
+| `briefing.minimum_relevance` | `medium` | **Fijado también en `phpunit.xml`.** Sin eso la suite hereda el `.env` de cada quien, y un `.env` viejo con `"media"` (el enum pasó a inglés) tumbaba diez tests en una sola máquina |
 
 Variables en `.env.example` con placeholders. `OPENROUTER_API_KEY` va solo en el `.env` de cada
 quien; nunca se commitea ni aparece en logs o mensajes de error.
@@ -588,27 +693,36 @@ quien; nunca se commitea ni aparece en logs o mensajes de error.
 
 ## 9. Tests
 
-259 tests. **Ninguno toca la red**: `tests/Pest.php` activa `Http::preventStrayRequests()` en
-toda la suite de Feature, así que una llamada sin falsear rompe el test en vez de salir a
-internet.
+279 tests, 595 assertions. **Ninguno toca la red**: `tests/Pest.php` activa
+`Http::preventStrayRequests()` en toda la suite de Feature, así que una llamada sin falsear rompe
+el test en vez de salir a internet.
 
 | Archivo | Cubre |
 |---|---|
 | `AnalyzeArticleJobTest` | Lease, concurrencia, fallos, disponibilidad |
+| `AnalyzeNewsCommandTest` | `news:analyze`: pendientes, `--retry-failed`, `--only-failed`, `--limit`, filtro por fuente |
 | `AnalyzerFallbackTest` | La cadena, cortocircuito, OpenRouter |
 | `ClusterArticlesJobTest` | Agrupación e idempotencia |
 | `GenerateBriefingJobTest` | Ventanas, orden, zona horaria |
 | `ScrapeSourceJobTest` | Deduplicación, aislamiento de fallos |
-| `RssSpiderTest` / `HtmlListingSpiderTest` | Arañas contra fixtures reales |
+| `RssSpiderTest` | Feed, allowlist, robots, SSRF, redirecciones, tamaño máximo |
+| `HtmlListingSpiderTest` | Listados, filtro editorial, y el enriquecimiento: fecha por JSON-LD y por `meta`, nota caída, no pisar la fecha del listado, apagado por config |
 | `FetchMarketSnapshotsJobTest` | Yahoo falseado |
 | `EditorialExposureTest` | Que nada se filtre antes de tiempo |
 | `FrontendSmokeTest` | Las 6 rutas |
 | `NewsPipelineCommandTest` | Pipeline completo |
-| `Unit/ArticleClusteringEngineTest` | El motor, sin base de datos |
+| `Unit/ArticleClusteringEngineTest` | El motor sin base de datos, más el caso Sartor y los límites de la coincidencia laxa |
 | `Unit/AnalysisResponseParserTest`, `OllamaAnalyzerTest` | Parseo y adaptador |
 
 Las fixtures de `tests/Fixtures/` son HTML y XML **reales recortados**: son el detector de
 quiebre cuando un medio cambia su maquetado.
+
+**Dos trampas de tests con fecha que ya nos costaron:**
+
+- `ClusterArticlesJobTest` congela el reloj en un `beforeEach`. Los tests fijan `published_at` a
+  una fecha literal y la ventana se mide contra `now()` cuando no hay cutoff explícito: sin
+  congelar, pasaban hoy y fallaban solos mañana.
+- `phpunit.xml` fija `NEWS_MIN_RELEVANCE=medium` para no heredar el `.env` de cada quien.
 
 ---
 
@@ -619,7 +733,7 @@ composer install && npm install     # imprescindible tras cada pull
 cp .env.example .env
 php artisan key:generate
 touch database/database.sqlite
-php artisan migrate --seed
+php artisan migrate --seed      # siembra SOLO las fuentes
 npm run build
 
 composer run dev        # Mac/Linux
@@ -628,6 +742,14 @@ composer run dev:win    # Windows (sin Pail, que necesita pcntl)
 php artisan test --compact
 vendor/bin/pint
 ```
+
+Con la base recién migrada las rutas muestran su **estado vacío**, no un error: el contenido lo
+escribe el pipeline (`php artisan news:pipeline`). Para llenarla sin salir a la red —o si el
+scraping falla en vivo durante la presentación— está `php artisan db:seed --class=DemoSeeder`.
+
+> **`migrate:fresh` borra los análisis**, y cada uno costó llamadas a la API. Para cambios de
+> esquema usa `php artisan migrate`. Re-scrapear, en cambio, es gratis: el pipeline nunca
+> reanaliza lo que ya está `completed`.
 
 ---
 
@@ -640,7 +762,9 @@ vendor/bin/pint
 | Cambiar el prompt | `resources/views/prompts/analyze-article-v1.blade.php` |
 | Cambiar qué se muestra | `resources/views/` |
 | Cambiar colores o tipografía | `resources/css/app.css` (y leer `AUDITORIA-UI.md`) |
-| Ajustar el clustering | `config/newsscraper.php` → `clustering` |
+| Ajustar el clustering | `config/newsscraper.php` → `clustering`, y `EntityNormalizer::GENERIC_TOKENS` si une de más |
+| Recuperar análisis fallidos | `php artisan news:analyze --retry-failed` |
+| Que las arañas no abran la nota | `NEWS_SCRAPE_FETCH_METADATA=false` (pierdes las fechas reales) |
 | Cambiar horarios | `Enums/BriefingEdition::scheduledHour()` |
 | Entender una decisión | `CLAUDE.md` §3 (técnicas), `PLAN.md` (plan y pendientes), `AUDITORIA-UI.md` (interfaz) |
 
@@ -820,9 +944,14 @@ private function shouldFallBack(Throwable $exception): bool
 | `AnalysisValidationException` (JSON no cumple esquema) | **no** | Sale y explota |
 | `AnalysisParseException` (no es JSON) | **no** | Sale y explota |
 
-**El 429 es el caso que más se ejecuta**, porque los modelos gratuitos tienen cuota baja. En la
-validación real: gemma resolvió 15 artículos, se topó con su cuota, y gpt-oss y nemotron
-resolvieron 3 sin que nadie interviniera.
+**El 429 es el caso que más se ejecuta** cuando manda OpenRouter, porque los modelos gratuitos
+tienen cuota baja. En la primera validación (sin Ollama instalado): gemma resolvió 15 artículos,
+se topó con su cuota, y gpt-oss y nemotron resolvieron 3 sin que nadie interviniera.
+
+> **Con Ollama ya instalado, el reparto cambió por completo.** Los 45 análisis de la base actual
+> los resolvió **`ollama llama3.2:3b`**, el primer eslabón, y la cadena casi no se ejerció. Lo que
+> apareció en su lugar es el problema descrito abajo: un modelo local pequeño falla el esquema
+> seguido, y esa clase de fallo **no** baja al respaldo. Ver A.4.1.
 
 **Por qué un 401 no cambia de modelo:** una API key inválida no se arregla probando otro modelo
 del mismo proveedor. Si se tratara como indisponibilidad, la cadena se comería el error, probaría
@@ -832,6 +961,27 @@ diagnóstico falso para un problema de una línea en el `.env`.
 **Por qué un JSON mal formado tampoco:** casi siempre es el prompt o el esquema. Si el segundo
 modelo lo salva, el bug del primero nunca se ve. Se puede activar con
 `NEWS_AI_FALLBACK_ON_INVALID=true`, a sabiendas.
+
+### A.4.1 Dónde esa regla empezó a doler
+
+La regla se escribió asumiendo que el JSON inválido delata un prompt roto. Con Ollama instalado
+apareció el caso que no cubre: **el JSON inválido delata un modelo demasiado chico**.
+
+El log acumula **25 `AnalysisValidationException`**. `llama3.2:3b` respeta el `format` de Ollama
+la mayoría de las veces, pero no siempre, y cada vez que falla el esquema el artículo se marca
+`failed` **sin llegar a probar los tres modelos de OpenRouter que están justo debajo en la
+cadena**. Hoy hay 13 artículos en ese estado, repartidos entre las tres fuentes.
+
+No es un bug: el código hace exactamente lo documentado. Es que la premisa cambió. Tres salidas,
+ninguna elegida todavía (`PLAN.md §4.1`):
+
+| Salida | Costo |
+|---|---|
+| `NEWS_AI_FALLBACK_ON_INVALID=true` | Vuelve a esconder los errores de prompt, que es lo que la regla evitaba |
+| Un modelo local más grande | Depende de la máquina de cada integrante |
+| Poner OpenRouter primero en la cadena | Gasta cuota gratuita en lo que Ollama ya resuelve bien |
+
+Mientras tanto, `php artisan news:analyze --retry-failed` los recupera.
 
 ## A.5 El cortocircuito
 
@@ -849,7 +999,7 @@ su propio proceso: una variable de instancia se perdería entre uno y otro.
 
 El primer éxito borra el contador entero, no lo decrementa: si el modelo volvió, volvió.
 
-Comprobado tras la corrida real:
+Comprobado tras la corrida real (cuando Ollama todavía no estaba instalado):
 
 ```
 ollama                                      fallos=2  abierto=false
@@ -1101,6 +1251,8 @@ news:scrape --sync
        │    └─ SafeHttpFetcher::get($url)      ← ver C.3
        │         └─ parseo (SimpleXML o DomCrawler)
        │              └─ list<ScrapedArticle>
+       │                   └─ [solo HTML] enrich(): 1 request por nota,
+       │                      fecha + autor, después de aplicar el tope
        ├─ por artículo: persist()
        │    ├─ CanonicalUrl::hash($url)
        │    ├─ Article::updateOrCreate(['url_hash' => $hash], [...])
@@ -1192,8 +1344,17 @@ selectores y `articlePathPattern()`. Resuelve URLs relativas contra el host del 
 duplicados dentro del mismo listado, y usa el primer nodo **con texto** de cada selector (los
 listados repiten selectores en nodos vacíos de maquetado).
 
-**Ninguna abre la nota.** Un request por corrida. Resuelve tres cosas de una: no se topa con
-paywalls, no se almacena cuerpo con copyright, y no depende de la estructura interna del artículo.
+**Las HTML sí abren la nota, y solo para los metadatos.** Es un cambio respecto del diseño
+original —que era un request por corrida— forzado por los datos: los listados chilenos no publican
+fecha (DF 12 de 103 tarjetas, Pulso 0 de 77) y sin `published_at` real la agrupación y el corte del
+briefing se miden contra la hora del scrape, idéntica para toda la corrida.
+
+Lo que **no** cambió es la regla que importa: de la nota se leen fecha y autor, nunca el cuerpo. La
+bajada sigue siendo la del listado, que es lo que el medio muestra en abierto, así que no se
+almacena texto con copyright y un paywall no rompe nada —`enrich()` devuelve el artículo tal como
+venía. Detalle completo en §4.6.1.
+
+Las RSS no lo necesitan: el feed ya trae `pubDate`.
 
 ## C.7 El filtro editorial
 
@@ -1242,10 +1403,33 @@ si categoría distinta            → no hay arista
 si |fecha_a - fecha_b| > ventana → no hay arista
 
 jaccard = |tokens_a ∩ tokens_b| / |tokens_a ∪ tokens_b|
-entidades_compartidas = |entidades_a ∩ entidades_b|
+entidades_compartidas = EntityNormalizer::sharedEntities(a, b)   ← NO array_intersect
 
-si jaccard >= umbral  O  entidades_compartidas >= mínimo  → arista
+si jaccard >= umbral (0,62)  O  entidades_compartidas >= mínimo (1)  → arista
 ```
+
+**Las entidades no se comparan por igualdad exacta.** `EntityNormalizer::matches()` acepta que una
+mención sea **subconjunto estricto** de la otra: `larrain` y `pedro pablo larrain` son la misma
+persona, y compararlas por igualdad era la razón por la que un mismo hecho quedaba como dos
+acontecimientos.
+
+Para que eso no una todo con todo, el subconjunto **tiene que aportar algo distintivo**: al menos
+un token que no esté en `GENERIC_TOKENS` (`banco`, `ministerio`, `fiscalia`, `corte`, `presidente`,
+`nacional`, `estado`…) y que llegue a 4 caracteres.
+
+| Par | ¿Une? | Por qué |
+|---|---|---|
+| `Larraín` / `Pedro Pablo Larraín` | sí | `larrain` es distintivo |
+| `Banco` / `Banco Central` | **no** | `banco` es genérico; si no, uniría con `Banco Estado` y de ahí en cascada |
+| `Corte` / `Corte Suprema` | **no** | ídem |
+| `BHP` / `BHP Billiton` | **no** | menos de 4 caracteres. Conservador a propósito: si los dos medios la escriben igual, la igualdad exacta ya basta |
+
+De cada coincidencia se conserva la **variante más específica** (`mostSpecific()`): en el `Event`
+queda `pedro pablo larrain`, no `larrain`.
+
+Y dentro de un cluster, `groupMemberEntities()` cuenta **por artículo distinto**, no por mención:
+un solo artículo que nombre a la persona de dos formas no puede figurar como si dos medios la
+hubieran mencionado.
 
 **Paso 3 — Ordenar las aristas por fuerza.** Ahí está la sutileza:
 
@@ -1293,19 +1477,26 @@ coincida. Si algo cambió entre la lectura y la escritura, se aborta. Más una c
 El slug lleva el hash como sufijo (`titulo-slug-a3f5e1b2c9`), así que dos hechos distintos con el
 mismo titular nunca colisionan.
 
-## D.4 Lo que no funciona, medido
+## D.4 Qué funciona y qué queda pendiente
 
-> Solo se agrupan artículos con `event_id IS NULL`, y un grupo con un miembro nuevo tiene otro
-> `cluster_key`. **Un artículo que llega tarde abre un segundo acontecimiento** en vez de sumarse
-> al primero.
+**Resuelto: ya agrupa entre medios con datos reales.** El caso que antes fallaba —dos notas sobre
+la misma jornada del caso Sartor, Jaccard 0,25 contra umbral 0,62 y entidades compartidas 0 porque
+un artículo extrajo `larrain` y el otro `pedro pablo larrain`— está cubierto por la coincidencia
+laxa de D.2 y por `shared_entities_minimum = 1`, con cinco tests que lo fijan en
+`tests/Unit/ArticleClusteringEngineTest.php`. En la base actual hay un acontecimiento que une **3
+artículos de 2 medios distintos** (venta del 1% de Falabella, Pulso ×2 + Diario Financiero).
 
-> **Y con datos reales no agrupa nada.** Dos notas sobre el caso Sartor, de dos medios distintos:
-> Jaccard 0,25 contra umbral 0,62; entidades compartidas 0 porque un artículo extrajo `larrain` y
-> el otro `pedro pablo larrain` —la misma persona— que `EntityNormalizer` no une porque compara
-> cadenas exactas. Diagnóstico completo, barrido de umbrales y arreglos propuestos en
-> `PLAN.md §4.2`.
+**Pendiente 1 — sobre-agrupación.** Ese mismo acontecimiento se llevó adentro una nota sobre la
+dotación de Falabella y Cencosud, que es un hecho distinto: comparten empresa y categoría, y con el
+mínimo en 1 eso alcanza para unirlos. `GENERIC_TOKENS` acota el problema para instituciones
+(`banco`, `ministerio`, `corte`), pero el nombre propio de una empresa grande sigue uniendo mucho.
+Conviene medirlo con más corridas antes de mover el umbral.
 
-Es el corazón del MVP y hoy no cumple. Está documentado como bloqueante.
+**Pendiente 2 — artículos que llegan tarde.** Solo se agrupan artículos con `event_id IS NULL`, y
+un grupo con un miembro nuevo tiene otro `cluster_key`: si un medio publica su versión después de
+que el acontecimiento ya se creó, se abre un **segundo** acontecimiento en vez de sumarse al
+primero. La alternativa —reutilizar el acontecimiento al que ya pertenece algún miembro— cuesta la
+inmutabilidad que hoy hace al job seguro ante concurrencia. Sin decidir; ver `PLAN.md §4.2`.
 
 ---
 

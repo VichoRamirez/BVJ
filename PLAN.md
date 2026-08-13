@@ -3,9 +3,13 @@
 Plan de trabajo para el proyecto integrador de la Unidad 3 (Laravel), IIP323W · 2026-2.
 Contexto, decisiones y reglas están en `CLAUDE.md`; el alcance viene de `NewScrapper-propuesta-laravel.pdf`.
 
-**Estado actual:** el dominio y el cableado del pipeline están implementados. Existen las doce tablas con sus modelos, factories y seeders; las seis rutas del frontend leen de la base de datos; y los cuatro jobs (`ScrapeSourceJob`, `AnalyzeArticleJob`, `ClusterArticlesJob`, `GenerateBriefingJob`), el orquestador `news:pipeline` y el scheduler de 07:00/18:00 ya corren de punta a punta.
+**Estado actual (2026-08-13):** el pipeline corre de punta a punta **con datos reales**. Las doce tablas, los cinco jobs, el orquestador `news:pipeline` y el scheduler de 07:00/18:00 están implementados; las seis rutas leen de la base de datos; los tres spiders recolectan de fuentes vivas; la capa de IA analiza con Ollama local y cadena de respaldo a OpenRouter; y la agrupación entre medios **ya funciona**. 279 tests, 595 assertions, todos en verde y ninguno toca la red (`Http::preventStrayRequests()` en toda la suite de Feature).
 
-**Lo que falta es la extracción de noticias:** los spiders detrás de `App\Contracts\SourceScraper`. Los datos de mercado ya se capturan de Yahoo Finance en vivo (`php artisan news:markets`). Todos los tests corren sin red — `Http::preventStrayRequests()` está activo en la suite de Feature, así que una llamada sin falsear falla el test en vez de salir a internet.
+En la base de trabajo hoy: 59 artículos de 3 fuentes, 45 analizados, 20 acontecimientos, 2 briefings, 6 instrumentos de mercado.
+
+**Lo que falta** es pulido y cierre: recuperar los 13 análisis fallidos, decidir la política de respaldo ante JSON inválido (§4.1), vigilar la sobre-agrupación (§4.2), la revisión visual que firma Vicente, el README y el guion de la demo.
+
+> **Aviso de merge.** Las secciones §4.1 y §4.2 de este archivo fueron revertidas por error en el merge del commit `157dbab` y perdieron el trabajo de la cadena de respaldo y el diagnóstico de agrupación. Están restauradas y puestas al día acá. Al resolver conflictos en `PLAN.md`, revisa que no se pierdan bloques enteros.
 
 > **Bloqueo de entorno:** el `composer.lock` fue resuelto en PHP 8.4+ (`symfony/*` 8.1 pide `php >=8.4.1`, y `pestphp/pest ^5` pide `php ^8.4` con PHPUnit 13). **El proyecto no corre en PHP 8.3.** Cada integrante necesita PHP 8.4 o 8.5 instalado; con 8.3 el `composer install` falla en la resolución.
 
@@ -16,13 +20,15 @@ Contexto, decisiones y reglas están en `CLAUDE.md`; el alcance viene de `NewScr
 Un **pipeline por lotes** que corre dos veces al día:
 
 ```
-Scheduler ──> ScrapeSourceJob (Roach, 1 por Source)
+Scheduler ──> ScrapeSourceJob (1 por Source, vía SafeHttpFetcher)
                  └─> Article (crudo, deduplicado por hash de URL)
                        └─> AnalyzeArticleJob (LLM → JSON validado)
                              └─> Analysis + Entities + Tags
                                    └─> ClusterArticlesJob (agrupa Articles → Event)
                                          └─> GenerateBriefingJob (top N Events → Briefing)
                                                └─> Blade lee de la BD (sin llamadas externas en request)
+
+              FetchMarketSnapshotsJob (Yahoo Finance) ──> MarketSnapshot
 ```
 
 Todo lo externo ocurre en colas. Las vistas solo leen tablas ya escritas.
@@ -74,7 +80,7 @@ Migraciones en orden de dependencia:
 - [x] Crear los Enums del dominio. Los cinco están en uso como casts en los modelos.
 - [x] Migraciones + modelos + factories + seeders (`SourceSeeder` con las cinco fuentes del MVP).
 - [x] Definir relaciones Eloquent con tipado explícito (`Article::source()`, `Article::analysis()`, `Article::entities()`, `Event::articles()`, `Briefing::events()`).
-- [ ] Layout Blade base + Tailwind funcionando. *(el layout y los tokens están; falta emitir `@fonts` en `resources/views/components/layouts/app.blade.php` —hoy Archivo nunca carga porque solo lo emitía el `welcome.blade.php` que se eliminó— más la revisión móvil y de modo oscuro, que firma Vicente)*
+- [ ] Layout Blade base + Tailwind funcionando. *(el layout y los tokens están, y `@fonts` ya se emite en `resources/views/components/layouts/app.blade.php` —antes solo lo hacía el `welcome.blade.php` que se eliminó, así que Archivo nunca cargaba—; falta la revisión móvil y de modo oscuro, que firma Vicente)*
 
 **Hecho cuando:** `php artisan migrate:fresh --seed` corre limpio y un test de factories crea Article + Analysis + Event. ✔ `tests/Feature/DomainFactoriesTest.php`.
 
@@ -113,7 +119,9 @@ Migraciones en orden de dependencia:
 > **Al hacer `git pull`, corre `composer install`.** El lock cambió; sin eso, `HtmlListingSpider` falla con "class not found".
 
 - [x] Respetar `robots.txt`, retardo entre requests y User-Agent propio, más allowlist de hosts, anti-SSRF, redirecciones revalidadas en cada salto, tamaño máximo y normalización de codificación. Todo centralizado en `SafeHttpFetcher`: ningún spider hace requests por su cuenta.
-- [x] `DiarioFinancieroSpider` y `PulsoSpider` sobre `App\Spiders\HtmlListingSpider`, más `BbcMundoEconomiaSpider` sobre `RssSpider`. Verificadas en vivo: 6, 12 y 25 artículos reales recolectados.
+- [x] `DiarioFinancieroSpider` y `PulsoSpider` sobre `App\Spiders\HtmlListingSpider`, más `BbcBusinessSpider` sobre `RssSpider`. Verificadas en vivo; en la base actual: 11, 23 y 25 artículos reales.
+- [x] **Cambiada la fuente de BBC.** `BbcMundoEconomiaSpider` se reemplazó por `BbcBusinessSpider` (`feeds.bbci.co.uk/news/business/rss.xml`). El feed anterior no era de economía: `feeds.bbci.co.uk/mundo/economia/rss.xml` devuelve el feed general de BBC Mundo —su `<title>` es "BBC Mundo"— y metía terremotos, eclipses y perfiles biográficos en un briefing financiero. **Contrapartida asumida:** el feed nuevo publica en inglés y con foco en Reino Unido; el resumen sale traducido porque el análisis se pide en español, pero la cobertura no es chilena. Es fuente de contraste, no del MVP.
+- [x] **Fecha real de publicación.** Los listados chilenos casi no la publican —medido el 2026-08-13: Diario Financiero 12 de 103 tarjetas, Pulso 0 de 77— y sin ella todos los artículos de una corrida quedaban con la hora del scrape. Como la ventana de agrupación y el corte del briefing se miden contra `published_at`, eso no era cosmético. `HtmlListingSpider::enrich()` abre cada nota **después de aplicar el tope** y lee solo fecha y autor (`article:published_time`, `datePublished`, JSON-LD): nunca el cuerpo, la bajada sigue siendo la del listado, y si la nota no responde se conserva el artículo tal cual. Se apaga con `NEWS_SCRAPE_FETCH_METADATA=false`. **Resultado: 59 de 59 artículos con fecha real.**
 - [x] Poblar `sources.spider_class` en `SourceSeeder`. Las fuentes sin araña quedan **inactivas** con el motivo escrito: una fuente activa sin spider solo acumula fallos.
 - [x] Filtrar lo que no es periodismo. Los listados mezclan notas con publirreportajes, contenido *branded* y videos; cada araña declara en `articlePathPattern()` qué rutas son notas. Publicar publicidad pagada dentro del briefing, resumida por IA, sería engañar al lector.
 - [ ] Arañas para Bloomberg Línea y El Mercurio Inversiones.
@@ -165,7 +173,42 @@ Migraciones en orden de dependencia:
 - [x] Prompt en `resources/views/prompts/analyze-article-v1.blade.php` (no en `resources/prompts/`, para que `view()` lo encuentre): pide JSON estricto, en español, con categorías del enum.
 - [x] Validación de la respuesta con `Validator` contra un esquema; en fallo → 1 reintento → `AnalysisStatus::Failed` + log. `raw_response` viaja en el propio `AnalysisResult` y se guarda siempre.
 - [x] `AnalyzeArticleJob` con `ThrottlesExceptions` / backoff; entidades y tags con `firstOrCreate` normalizado ("Codelco" y "CODELCO" son la misma fila).
-- [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')` → deja lista la ruta para un `GeminiAnalyzer` si el profesor lo exige.
+- [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')`.
+- [x] **Cadena de respaldo entre modelos** (`NEWS_AI_DRIVER=chain`). `FallbackNewsAnalyzer` prueba los eslabones de `ai.chain` en orden y usa el primero que responda; es un `NewsAnalyzer` más, así que el pipeline no se entera. Incluye `OpenRouterAnalyzer` (API compatible con OpenAI, modelos gratuitos) y un cortocircuito por modelo.
+- [x] Comando `php artisan news:analyze {--source=} {--retry-failed} {--only-failed} {--limit=}`. Es la **única** forma de recuperar un análisis fallido: `news:pipeline` solo toma los `pending`, y re-scrapear tampoco reencola —un artículo que ya existe y no está `pending` se salta a propósito, para no repetir llamadas que ya se pagaron—.
+
+**Reglas de la cadena, y por qué:**
+
+- Los eslabones se construyen **perezosamente**. Los constructores validan y lanzan si falta configuración, así que construirlos todos por adelantado haría que un eslabón sin API key tumbara también a los que sí funcionan.
+- Solo se cambia de modelo ante **indisponibilidad** (`App\Contracts\AnalyzerUnavailable`): timeout, 429, 503, configuración ausente. Una respuesta mal formada no dispara el salto —es casi siempre el prompt— salvo que se active `NEWS_AI_FALLBACK_ON_INVALID`.
+- **Cortocircuito por modelo.** Sin él, un proveedor caído se reintenta una vez por artículo: con 40 artículos y 60 s de timeout son 40 minutos de espera pura.
+- Si se agota la cadena, el artículo vuelve a `pending`, **no** a `failed`: una caída del proveedor no puede sacarlo del pipeline para siempre.
+- `analyses.provider` y `analyses.model` registran qué modelo respondió cada artículo.
+
+> **La oferta gratuita de OpenRouter rota.** Los modelos de `ai.chain` fueron verificados contra
+> `https://openrouter.ai/api/v1/models` y soportan salida estructurada, pero hay que revisarlos
+> cada cierto tiempo. Sus cuotas son bajas: el 429 es esperable y es justo lo que la cadena resuelve.
+
+> ### 🟠 Decisión abierta — un modelo local chico no baja al respaldo
+>
+> Con Ollama ya instalado, **los 45 análisis de la base los resolvió `ollama llama3.2:3b`**, el
+> primer eslabón, y la cadena casi no se ejerció. Lo que apareció en su lugar es otro problema: el
+> log acumula **25 `AnalysisValidationException`**. Un modelo de 3B respeta el `format` la mayoría
+> de las veces, pero no siempre, y como el JSON inválido **no** cuenta como indisponibilidad, esos
+> artículos van directo a `failed` sin llegar a probar los tres modelos de OpenRouter que están
+> justo debajo. Hoy hay **13 artículos `failed`** por esa vía, más 1 colgado en `processing`.
+>
+> No es un bug: el código hace lo documentado. Cambió la premisa. La regla se escribió asumiendo
+> que el JSON inválido delata un prompt roto; acá delata un modelo demasiado chico.
+>
+> | Salida | Costo |
+> |---|---|
+> | `NEWS_AI_FALLBACK_ON_INVALID=true` | Vuelve a esconder los errores de prompt, que es lo que la regla evitaba |
+> | Un modelo local más grande (`llama3.1:8b` o similar) | Depende de la máquina de cada integrante |
+> | Poner OpenRouter primero en la cadena | Gasta cuota gratuita en lo que Ollama ya resuelve bien |
+> | Distinguir "esquema fallado N veces seguidas" de "fallo puntual" | Más código en `FallbackNewsAnalyzer` |
+>
+> Mientras se decide: `php artisan news:analyze --retry-failed` los recupera.
 
 **Concurrencia del análisis.** `AnalyzeArticleJob` toma un *lease* sobre el artículo (`analysis_status = processing` + `analysis_run_id`) antes de llamar al modelo, y solo persiste si al cerrar sigue teniendo el lease. Un `processing` más viejo que `NEWS_AI_PROCESSING_STALE_AFTER` se considera abandonado y se puede retomar. Un artículo sin texto y una URL en HTTP se resuelven antes de gastar una llamada al LLM.
 
@@ -176,7 +219,62 @@ Migraciones en orden de dependencia:
 - [x] Crear o reutilizar `Event`; `relevance_score` = relevancia máxima del cluster + bonus por fuentes distintas.
 - [x] `GenerateBriefingJob`: toma los Events del período (desde el briefing anterior), ordena por `relevance_score`, corta en N (config, por defecto 7) y crea `Briefing` + pivote ordenado. Una edición vacía no se publica.
 
+- [x] **Arreglada la deduplicación entre medios.** Ver el bloque verde de abajo.
+
 **La identidad de un `Event` es `cluster_key`**, el hash del conjunto exacto de artículos que lo forman (ids + `url_hash`). El slug lleva ese hash como sufijo, así que dos hechos distintos con el mismo titular nunca colisionan, y reprocesar el mismo grupo no duplica nada.
+
+> ### ✅ La deduplicación entre medios ya funciona
+>
+> **El problema, medido el 2026-08-13** sobre 18 artículos reales de Diario Financiero y Pulso
+> analizados con modelos de verdad: dos medios cubrieron la misma jornada del caso Sartor y
+> quedaron como **dos acontecimientos separados**.
+>
+> | Medio | Titular |
+> |---|---|
+> | Diario Financiero | "**Formalización del caso Sartor**: Fiscalía responde a defensas y vincula…" |
+> | Pulso | "**Caso Sartor**: Fiscalía cuestiona defensa de imputados en décima jornada" |
+>
+> Las dos condiciones fallaban. **Jaccard de títulos 0,25** contra un umbral de 0,62: dos medios
+> redactan el mismo hecho con vocabulario distinto, y los titulares en español comparten muchos
+> menos tokens de los que asumía el umbral. Y **entidades compartidas 0**, que era la causa real:
+> un artículo extrajo `larrain` y el otro `pedro pablo larrain` —la misma persona— que
+> `EntityNormalizer` no unía porque comparaba cadenas exactas.
+>
+> **Lo que se hizo**, atacando la causa y no el síntoma:
+>
+> 1. **Coincidencia laxa en `EntityNormalizer`.** `matches()` acepta que una mención sea subconjunto
+>    estricto de otra, siempre que aporte al menos un token distintivo: que no esté en
+>    `GENERIC_TOKENS` (`banco`, `ministerio`, `fiscalia`, `corte`, `presidente`, `nacional`,
+>    `estado`…) y que llegue a 4 caracteres. Sin esa condición, `banco` habría unido `Banco Central`
+>    con `Banco Estado` y de ahí en cascada dos hechos que solo comparten vocabulario financiero.
+>    `mostSpecific()` conserva la variante completa, así que en el `Event` queda `pedro pablo
+>    larrain`, no `larrain`.
+> 2. **`shared_entities_minimum` de 2 a 1**, manteniendo el Jaccard alto en 0,62: las entidades
+>    mandan y el título queda como refuerzo, no como requisito. Bajar el umbral de títulos se
+>    evaluó y se descartó — solo agrupaba por debajo de 0,25, y a ese nivel se fusionan hechos
+>    distintos que comparten jerga financiera.
+> 3. **`ArticleClusterer::groupMemberEntities()`** cuenta por artículo distinto, no por mención: un
+>    solo artículo que nombre a la persona de dos formas no puede figurar como si dos medios la
+>    hubieran mencionado.
+>
+> **Comprobado.** Cinco tests nuevos en `tests/Unit/ArticleClusteringEngineTest.php` fijan el caso
+> Sartor, los límites (`Banco`/`Banco Central` **no** une, `BHP`/`BHP Billiton` tampoco por corta),
+> y que una entidad coincidente no pueda saltarse la ventana temporal ni la categoría. Y con datos
+> reales: la base tiene un acontecimiento que une **3 artículos de 2 medios** sobre la venta del 1%
+> de Falabella por las hermanas Cúneo (Pulso ×2 + Diario Financiero). Es el punto 3 del alcance del
+> MVP, funcionando por primera vez.
+
+> ### 🟠 Decisión abierta — sobre-agrupación
+>
+> La contrapartida de `shared_entities_minimum = 1`: compartir **una sola** empresa basta. En ese
+> mismo acontecimiento de Falabella entró una nota sobre la **dotación de Falabella y Cencosud**,
+> que es un hecho distinto y solo comparte la empresa y la categoría.
+>
+> `GENERIC_TOKENS` acota el problema para instituciones, pero el nombre propio de una empresa
+> grande sigue uniendo mucho. Antes de tocar nada conviene medirlo con más corridas: con 20
+> acontecimientos no alcanza para saber si es un caso aislado o el patrón. Si resulta ser el
+> patrón, las salidas son exigir 2 entidades **o** un Jaccard mínimo de refuerzo (hoy la condición
+> es un `O`, podría ser `entidades >= 1 Y jaccard >= algo bajo`).
 
 > **Decisión abierta — artículos que llegan tarde.** Solo se agrupan artículos con `event_id` nulo, y un grupo con un miembro nuevo tiene otro `cluster_key`. Consecuencia: si un medio publica su versión de una historia después de que el acontecimiento ya se creó, se abre un **segundo** acontecimiento sobre el mismo hecho en vez de sumarse al primero. Eso choca de frente con el punto 3 del alcance del MVP ("agrupación de artículos que hablan del mismo acontecimiento"), que es lo que justifica el producto. La alternativa —reutilizar el acontecimiento al que ya pertenece algún miembro— cuesta la inmutabilidad que hoy hace al job seguro ante concurrencia. Hay que elegir.
 
@@ -201,7 +299,7 @@ Migraciones en orden de dependencia:
 > intercepta las llamadas —el paquete usa Guzzle directo, así que los tests
 > tendrían que mockear su cliente. Queda por decidir si se saca la dependencia.
 
-**Hecho cuando:** `php artisan news:pipeline --edition=morning` genera un briefing real end-to-end. ✔ probado de punta a punta en `tests/Feature/NewsPipelineCommandTest.php` con spider y analizador de mentira; falta repetirlo con fuentes reales.
+**Hecho cuando:** `php artisan news:pipeline --edition=morning` genera un briefing real end-to-end. ✔ Probado en `tests/Feature/NewsPipelineCommandTest.php` con spider y analizador de mentira, **y repetido con fuentes y modelos reales**: 59 artículos de 3 medios, 45 analizados, 20 acontecimientos —uno de ellos con 2 medios distintos— y 2 briefings publicados.
 
 ---
 
@@ -210,23 +308,31 @@ Migraciones en orden de dependencia:
 - [x] Cobertura de tests: parseo del LLM (JSON válido, inválido, campos faltantes), clustering, deduplicación por `url_hash`, orden del briefing, smoke de las 6 rutas y el pipeline completo. Ninguno toca la red.
 - [ ] Estados vacíos y de error en la UI (sin briefing aún, fuente caída, análisis fallido). *(los tres primeros hechos)*
 - [x] Seeder de demo (`DemoSeeder`) con un par de briefings realistas, por si el scraping falla en vivo durante la presentación. **Plan B obligatorio.** Adelantado a la Semana 1: 13 acontecimientos, 5 ediciones y 6 instrumentos, con fechas relativas a hoy.
+- [x] **`DemoSeeder` sacado de `DatabaseSeeder`.** Mientras estuvo ahí, un `migrate:fresh --seed` llenaba la base de acontecimientos inventados y en la portada era imposible distinguir qué venía del scraping real y qué era relleno. Ahora `--seed` siembra solo las fuentes y la demo se corre a mano: `php artisan db:seed --class=DemoSeeder`.
+- [x] Resuelto el tema del proveedor de IA: **no hay requisito de Gemini**. La capa admite Ollama local y OpenRouter (modelos gratuitos), y encadena ambos. Agregar un `GeminiAnalyzer` seguiría siendo una clase más si alguna vez hace falta.
+- [x] Validada la cadena con una API key real de OpenRouter, sobre 18 artículos chilenos reales (2026-08-13). **Los tres modelos rotaron solos**: `gemma` 15, `gpt-oss` 2, `nemotron` 1 — gemma agotó su cuota gratuita y el respaldo entró sin intervención. Ollama falló las 18 veces (todavía no estaba instalado) y el cortocircuito lo fue salteando. ~19 s por artículo, 18 de 18 analizados.
+- [x] Calidad del análisis confirmada: con el analizador falso todo caía en `economy`; con modelos reales las categorías salen variadas y correctas (`regulation`, `companies`, `markets`, `monetary`, `commodities`) y las entidades bien extraídas.
+- [x] **Arreglada la deduplicación entre medios** — ver §4.2. Era el corazón del MVP y lo que la validación con IA real dejó al descubierto.
+- [x] `NEWS_MIN_RELEVANCE=medium` fijado en `phpunit.xml`. Sin eso la suite hereda el `.env` de cada quien, y un `.env` viejo con `"media"` (el enum pasó a inglés) tumbaba diez tests en la máquina de un integrante y en ninguna otra.
+- [x] `@fonts` emitido en `resources/views/components/layouts/app.blade.php`. Archivo se sirve desde Bunny y sin esa directiva el manifiesto nunca salía: toda la app caía al fallback del sistema.
+- [ ] **Recuperar los 13 análisis fallidos** (`php artisan news:analyze --retry-failed`) y el artículo colgado en `processing`. Depende de resolver antes la decisión de §4.1, o volverán a fallar igual.
+- [ ] Reanalizar los 25 artículos de BBC si se quiere homogeneidad de modelo (consume cuota).
 - [ ] `vendor/bin/pint` sobre todo el proyecto.
-- [ ] README actualizado: instalación, configuración de la IA, cómo correr el pipeline a mano.
-- [ ] Confirmar con el profesor el tema Ollama vs. Gemini (ver `CLAUDE.md` §3) y, si corresponde, implementar `GeminiAnalyzer` — con la interfaz ya hecha es ~1 clase.
-- [ ] Guion de la demo: mostrar briefing → abrir un evento con 2+ fuentes → mostrar el enlace original → gráficos de mercado.
+- [ ] README actualizado: la tabla de arañas todavía dice `BbcMundoEconomiaSpider`.
+- [ ] Guion de la demo: mostrar briefing → **abrir el acontecimiento de Falabella, que tiene 2 medios** → mostrar el enlace original → gráficos de mercado.
 
 ---
 
 ## 6. Riesgos y mitigaciones
 
 | Riesgo (propuesta §10) | Mitigación en el plan |
-
 |---|---|
 | Cambios de HTML rompen scrapers | Spiders aislados por fuente + fixtures en tests que detectan el quiebre |
-| Bloqueo de scraping / paywalls | Fuente se marca inactiva, se registra el fallo; no se elude nada. Mínimo 2 fuentes de respaldo con RSS |
+| Bloqueo de scraping / paywalls | Fuente se marca inactiva, se registra el fallo; no se elude nada. `enrich()` nunca descarta un artículo porque la nota no responda |
 | Alucinaciones de la IA | Validación de esquema, `raw_response` guardado, enlace al original siempre visible, aviso de contenido generado |
 | Clasificación incorrecta | Categorías cerradas por enum; relevancia acotada 1–4 |
-| Duplicados no detectados | Clustering por título + entidades + ventana temporal; umbral ajustable sin tocar código |
+| Duplicados no detectados | Clustering por título + entidades **con coincidencia laxa de nombres** + ventana temporal; umbrales ajustables sin tocar código |
+| Caída de un modelo de IA | Cadena de respaldo (`NEWS_AI_DRIVER=chain`) + cortocircuito por modelo; si se agota, el artículo vuelve a `pending`, no a `failed` |
 | Caída de servicios externos | Todo en colas con reintentos; la web sirve el último briefing persistido |
 | Límites de API | Throttling en los jobs, 2 corridas diarias, análisis solo de artículos nuevos |
 | Demo en vivo falla | `DemoSeeder` con datos ya generados |

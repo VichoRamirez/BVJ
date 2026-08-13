@@ -38,6 +38,29 @@ npm install
 > vas a ver errores de "class not found" en clases que en el repo sí existen.
 > Lo mismo con `npm install` cuando cambie `package-lock.json`.
 
+#### Diagnóstico rápido
+
+Si algo no arranca, esta tabla dice qué correr. Sirve también para quien revise el proyecto sin
+haberlo instalado antes.
+
+| Síntoma | Causa | Comando |
+|---|---|---|
+| `Class "Symfony\Component\DomCrawler\Crawler" not found` | Falta `symfony/dom-crawler` | `composer install` |
+| `Class "Symfony\Component\CssSelector\..." not found` | Falta `symfony/css-selector` | `composer install` |
+| Cualquier `Class ... not found` de `vendor/` | `vendor/` desincronizado del lock | `composer install` |
+| `Unable to locate file in Vite manifest` | Falta compilar el frontend | `npm install && npm run build` |
+| `no such table: ...` | Faltan migraciones | `php artisan migrate --seed` |
+| `composer run dev` termina con código 1 en Windows | `laravel/pail` necesita `pcntl` (POSIX) | `composer run dev:win` |
+| `composer: command not found` en Git Bash | bash no completa `.bat` | `composer.bat ...` o usa PowerShell |
+
+Para verificar de una que el entorno está completo:
+
+```bash
+composer install && php artisan test --compact
+```
+
+Si la suite pasa entera, no falta ninguna dependencia.
+
 ### Dependencias de terceros
 
 Versiones exactas del `composer.lock`. Ninguna se instala a mano: las trae `composer install`.
@@ -52,8 +75,16 @@ Versiones exactas del `composer.lock`. Ninguna se instala a mano: las trae `comp
 `symfony/dom-crawler` y `symfony/css-selector` exigen **PHP >= 8.4.1**, igual que el resto del
 lock. No agregan dependencias transitivas nuevas: Symfony 8.1 ya estaba en el proyecto.
 
-El RSS se parsea con `SimpleXMLElement`, que es parte de PHP (`ext-simplexml`) y no requiere
-instalar nada.
+**Lo que NO requirió dependencia nueva**, por si alguien va a buscarla y no la encuentra:
+
+- **RSS** → `SimpleXMLElement`, parte de PHP (`ext-simplexml`).
+- **OpenRouter y la cadena de respaldo entre modelos** → HTTP client de Laravel. No hay SDK de
+  OpenAI ni de OpenRouter en el proyecto y no hace falta: la API es HTTP + JSON.
+- **Datos de mercado** → HTTP client de Laravel contra el endpoint público de Yahoo.
+- **Gráficos** → SVG en línea (`<x-sparkline>`), sin librería de charts.
+
+Si al agregar una librería nueva: se documenta acá con versión exacta y para qué sirve, y se
+avisa al equipo de correr `composer install`. Es regla del proyecto (`CLAUDE.md §4`).
 
 Copia el archivo de entorno y genera la clave de la aplicación:
 
@@ -70,9 +101,60 @@ idempotente, se puede volver a correr sin duplicar nada.
 
 Alternativamente, `composer run setup` ejecuta estos pasos automáticamente.
 
-### Configuración de Ollama
+### Configuración de la IA
 
-La integración usa únicamente Ollama local. En `.env`, configura el driver y un modelo instalado localmente:
+El pipeline habla con `App\Contracts\NewsAnalyzer`, así que el proveedor se cambia con una
+variable y sin tocar código. `NEWS_AI_DRIVER` acepta:
+
+| Valor | Qué hace |
+|---|---|
+| `chain` | **Recomendado.** Prueba varios modelos en orden y usa el primero que responda |
+| `ollama` | Solo Ollama local |
+| `openrouter` | Solo OpenRouter |
+| `fake` | Respuesta fija, sin red. Solo en `local` y `testing` |
+
+#### Cadena de respaldo (`chain`)
+
+Los eslabones se declaran en `config/newsscraper.php` (`ai.chain`): por defecto, Ollama local y
+después tres modelos gratuitos de OpenRouter.
+
+**Un eslabón mal configurado no rompe la cadena, se salta.** Puedes dejar Ollama primero aunque
+no lo tengas instalado: falla al construirse y pasa al siguiente. Los analizadores se construyen
+recién cuando les toca el turno.
+
+Solo se cambia de modelo por **indisponibilidad** (timeout, 429, 503, falta de configuración).
+Una respuesta que no cumple el esquema JSON **no** dispara el salto, porque casi siempre es un
+problema del prompt y taparlo con otro modelo lo esconde. Se puede activar con
+`NEWS_AI_FALLBACK_ON_INVALID=true`.
+
+Hay un cortocircuito por modelo: tras `NEWS_AI_CIRCUIT_FAILURES` fallos seguidos se salta
+durante `NEWS_AI_CIRCUIT_TTL` segundos. Sin él, un proveedor caído se reintentaría una vez por
+artículo — con 40 artículos y 60 s de timeout, 40 minutos de espera pura.
+
+Qué modelo respondió cada artículo queda en `analyses.provider` y `analyses.model`.
+
+#### OpenRouter
+
+API compatible con OpenAI, con modelos gratuitos. Consigue una clave en
+[openrouter.ai/keys](https://openrouter.ai/keys) y ponla en tu `.env`:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+> **La clave va solo en tu `.env`, que nunca se commitea.** No la pegues en el README, en un
+> issue, en un chat ni en el `.env.example`. Sin ella, los eslabones `openrouter` de la cadena
+> se saltan solos y el pipeline sigue funcionando con los demás.
+
+Los modelos gratuitos de la cadena por defecto soportan salida estructurada, que es lo que hace
+que el JSON cumpla el esquema. **La oferta gratuita de OpenRouter rota**: si un modelo deja de
+existir, verifica en [openrouter.ai/models](https://openrouter.ai/models) y actualiza `ai.chain`.
+También tienen cuota baja, así que el `429` es esperable — es justamente el caso que la cadena
+resuelve.
+
+#### Ollama
+
+Requiere tenerlo instalado y corriendo. En `.env`:
 
 ```
 NEWS_AI_DRIVER=ollama
@@ -85,7 +167,15 @@ NEWS_OLLAMA_RETRY_BACKOFF=100
 NEWS_OLLAMA_MAX_RESPONSE_BYTES=1048576
 ```
 
-La URL debe usar HTTP, un literal IP loopback (`127.0.0.1` o `[::1]`) y un puerto explícito.
+La URL debe usar HTTP, un literal IP loopback (`127.0.0.1` o `[::1]`) y un puerto explícito:
+`OllamaAnalyzer` rechaza cualquier otro host, así que Ollama Cloud no sirve por esta vía.
+
+Para comprobar que está arriba y que el modelo existe:
+
+```bash
+ollama serve
+ollama list          # si llama3.2:3b no aparece: ollama pull llama3.2:3b
+```
 
 ### Datos de mercado
 

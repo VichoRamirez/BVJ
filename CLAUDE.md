@@ -196,7 +196,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Backend | Laravel 13 + **PHP 8.4 o superior**. `composer.json` dice `^8.3`, pero es letra muerta: el `composer.lock` resuelto trae `symfony/*` 8.1 (`php >=8.4.1`) y `pestphp/pest ^5` (`php ^8.4`, PHPUnit 13). **En PHP 8.3 el `composer install` falla.** |
 | Base de datos | SQLite (`database/database.sqlite`) |
 | Scraping | **Resuelto: sin Roach** (no soporta Laravel 13). HTTP client de Laravel detrás de `App\Services\Scraping\SafeHttpFetcher`; RSS con `SimpleXMLElement`, HTML con `symfony/dom-crawler` + `symfony/css-selector` |
-| LLM | Ollama **local** vía HTTP en `127.0.0.1` o `[::1]` (`NEWS_OLLAMA_BASE_URL`, `NEWS_OLLAMA_MODEL`). `OllamaAnalyzer` rechaza cualquier otro host, así que **Ollama Cloud quedó fuera** — ver la discrepancia en §3 |
+| LLM | Detrás de `App\Contracts\NewsAnalyzer`, con cadena de respaldo (`NEWS_AI_DRIVER=chain`): Ollama **local** (solo loopback; Ollama Cloud queda fuera) y OpenRouter con modelos gratuitos (`OPENROUTER_API_KEY`). Se cambia de modelo solo ante indisponibilidad |
 | Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
 | Gráficos | SVG en línea con los tokens `--color-series-*` (`<x-sparkline>`). `laravel-charts` se descartó: última versión de 2023 y sin restricciones declaradas en su `composer.json` |
 | Frontend | Blade + Tailwind CSS 4 + Vite (sin SPA, sin framework JS) |
@@ -204,11 +204,14 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Tests | Pest 5 |
 | Formato | Laravel Pint |
 
-**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama local y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. El driver Ollama actual solo permite URLs HTTP loopback; no hay soporte cloud ni API keys.
+**Sobre Gemini:** la sección 7 de la propuesta menciona la API de Google Gemini, pero **no es un requisito del curso**; el equipo confirmó que puede usar el proveedor que prefiera. La capa de IA vive detrás de `Contracts\NewsAnalyzer` con drivers intercambiables y cadena de respaldo, así que sumar un `GeminiAnalyzer` sería una clase más y una entrada en `ai.chain`, sin tocar el pipeline.
+
+**Claves de API:** `OPENROUTER_API_KEY` va solo en el `.env` de cada quien. Nunca se commitea, no se pega en el README ni en issues, y ningún mensaje de error o log puede incluirla.
 
 ## 4. Reglas de trabajo
 
 ### Dependencias
+- **Si ves `Class ... not found` de algo que sí existe en el repo, falta correr `composer install`.** El `vendor/` se desincroniza del `composer.lock` en cada pull que trae dependencias nuevas. Tabla de síntomas y comandos en el README.
 - Instaladas y en el lock: `symfony/dom-crawler` v8.1.1 y `symfony/css-selector` v8.1.0 (scraping HTML). `scheb/yahoo-finance-api` v5.2 está instalada pero **sin uso**: los datos de mercado salen del HTTP client de Laravel; queda por decidir si se saca. Roach quedó descartado y laravel-charts también. **Cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost), y al agregar uno hay que documentarlo en el README con versión, para qué sirve y el recordatorio de correr `composer install`.
 - No cambiar versiones de Laravel, PHP ni Pest.
 

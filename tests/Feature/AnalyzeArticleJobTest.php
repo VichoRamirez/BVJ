@@ -7,6 +7,8 @@ use App\Enums\AnalysisStatus;
 use App\Enums\EntityType;
 use App\Enums\NewsCategory;
 use App\Enums\RelevanceLevel;
+use App\Exceptions\AnalysisValidationException;
+use App\Exceptions\NoAnalyzerAvailableException;
 use App\Jobs\AnalyzeArticleJob;
 use App\Models\Analysis;
 use App\Models\Article;
@@ -425,4 +427,36 @@ test('analyses an article served over http, without the url as context', functio
 
     expect($receivedUrl)->toBeNull()
         ->and($article->fresh()->analysis_status)->toBe(AnalysisStatus::Completed);
+});
+
+test('a downed provider leaves the article pending, not failed', function () {
+    $article = Article::factory()->pending()->create();
+    $job = new AnalyzeArticleJob($article->id);
+
+    // El job toma el lease antes de llamar al modelo; se reproduce ese estado.
+    $article->update([
+        'analysis_status' => AnalysisStatus::Processing,
+        'analysis_run_id' => $job->runId,
+    ]);
+
+    $job->failed(new NoAnalyzerAvailableException('ningún modelo disponible'));
+
+    // Una caída del proveedor no puede sacar el artículo del pipeline para
+    // siempre: vuelve a la cola en vez de quedar marcado como fallido.
+    expect($article->fresh()->analysis_status)->toBe(AnalysisStatus::Pending)
+        ->and($article->fresh()->analysis_error)->toContain('Ningún modelo');
+});
+
+test('a real analysis failure still marks the article as failed', function () {
+    $article = Article::factory()->pending()->create();
+    $job = new AnalyzeArticleJob($article->id);
+
+    $article->update([
+        'analysis_status' => AnalysisStatus::Processing,
+        'analysis_run_id' => $job->runId,
+    ]);
+
+    $job->failed(new AnalysisValidationException(['summary' => ['requerido']]));
+
+    expect($article->fresh()->analysis_status)->toBe(AnalysisStatus::Failed);
 });

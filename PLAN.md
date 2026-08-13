@@ -165,7 +165,20 @@ Migraciones en orden de dependencia:
 - [x] Prompt en `resources/views/prompts/analyze-article-v1.blade.php` (no en `resources/prompts/`, para que `view()` lo encuentre): pide JSON estricto, en español, con categorías del enum.
 - [x] Validación de la respuesta con `Validator` contra un esquema; en fallo → 1 reintento → `AnalysisStatus::Failed` + log. `raw_response` viaja en el propio `AnalysisResult` y se guarda siempre.
 - [x] `AnalyzeArticleJob` con `ThrottlesExceptions` / backoff; entidades y tags con `firstOrCreate` normalizado ("Codelco" y "CODELCO" son la misma fila).
-- [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')` → deja lista la ruta para un `GeminiAnalyzer` si el profesor lo exige.
+- [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')`.
+- [x] **Cadena de respaldo entre modelos** (`NEWS_AI_DRIVER=chain`). `FallbackNewsAnalyzer` prueba los eslabones de `ai.chain` en orden y usa el primero que responda; es un `NewsAnalyzer` más, así que el pipeline no se entera. Incluye `OpenRouterAnalyzer` (API compatible con OpenAI, modelos gratuitos) y un cortocircuito por modelo.
+
+**Reglas de la cadena, y por qué:**
+
+- Los eslabones se construyen **perezosamente**. Los constructores validan y lanzan si falta configuración, así que construirlos todos por adelantado haría que un eslabón sin API key tumbara también a los que sí funcionan. Hoy eso importa: no hay Ollama instalado y la cadena igual funciona.
+- Solo se cambia de modelo ante **indisponibilidad** (`App\Contracts\AnalyzerUnavailable`): timeout, 429, 503, configuración ausente. Una respuesta mal formada no dispara el salto —es casi siempre el prompt— salvo que se active `NEWS_AI_FALLBACK_ON_INVALID`.
+- **Cortocircuito por modelo.** Sin él, un proveedor caído se reintenta una vez por artículo: con 40 artículos y 60 s de timeout son 40 minutos de espera pura.
+- Si se agota la cadena, el artículo vuelve a `pending`, **no** a `failed`: una caída del proveedor no puede sacarlo del pipeline para siempre.
+- `analyses.provider` y `analyses.model` registran qué modelo respondió cada artículo.
+
+> **La oferta gratuita de OpenRouter rota.** Los modelos de `ai.chain` fueron verificados contra
+> `https://openrouter.ai/api/v1/models` y soportan salida estructurada, pero hay que revisarlos
+> cada cierto tiempo. Sus cuotas son bajas: el 429 es esperable y es justo lo que la cadena resuelve.
 
 **Concurrencia del análisis.** `AnalyzeArticleJob` toma un *lease* sobre el artículo (`analysis_status = processing` + `analysis_run_id`) antes de llamar al modelo, y solo persiste si al cerrar sigue teniendo el lease. Un `processing` más viejo que `NEWS_AI_PROCESSING_STALE_AFTER` se considera abandonado y se puede retomar. Un artículo sin texto y una URL en HTTP se resuelven antes de gastar una llamada al LLM.
 
@@ -177,6 +190,52 @@ Migraciones en orden de dependencia:
 - [x] `GenerateBriefingJob`: toma los Events del período (desde el briefing anterior), ordena por `relevance_score`, corta en N (config, por defecto 7) y crea `Briefing` + pivote ordenado. Una edición vacía no se publica.
 
 **La identidad de un `Event` es `cluster_key`**, el hash del conjunto exacto de artículos que lo forman (ids + `url_hash`). El slug lleva ese hash como sufijo, así que dos hechos distintos con el mismo titular nunca colisionan, y reprocesar el mismo grupo no duplica nada.
+
+> ### 🔴 La deduplicación entre medios no funciona con datos reales
+>
+> **Medido el 2026-08-13** sobre 18 artículos reales de Diario Financiero y Pulso, analizados con
+> modelos de verdad (no el analizador falso). Es el punto 3 del alcance del MVP y lo que
+> justifica el producto, así que conviene tratarlo como bloqueante.
+>
+> El caso es de manual — dos medios distintos, el mismo hecho:
+>
+> | Medio | Titular |
+> |---|---|
+> | Diario Financiero | "**Formalización del caso Sartor**: Fiscalía responde a defensas y vincula…" |
+> | Pulso | "**Caso Sartor**: Fiscalía cuestiona defensa de imputados en décima jornada" |
+>
+> Quedaron como **dos acontecimientos separados**. Las dos condiciones de agrupación fallan:
+>
+> - **Jaccard de títulos = 0,25** contra el umbral de `0,62`. Comparten `formalizacion, caso,
+>   sartor, fiscalia` y nada más: dos medios redactan el mismo hecho con vocabulario distinto.
+>   Los titulares en español comparten muchos menos tokens de los que asume el umbral.
+> - **Entidades compartidas = 0** contra el mínimo de `2`. Y acá está la causa real: un artículo
+>   extrajo `larrain` y el otro `pedro pablo larrain`. **Es la misma persona**, pero
+>   `EntityNormalizer` compara cadenas exactas y no las une.
+>
+> Barrido de umbrales sobre esos mismos 18 artículos:
+>
+> | jaccard | entidades mín. | clusters | ¿agrupa Sartor? |
+> |---|---|---|---|
+> | 0,62 | 2 | 18 (0 multi) | no ← configuración actual |
+> | 0,35 | 1 | 18 (0 multi) | no |
+> | 0,25 | 1 | 17 (1 multi) | **sí** |
+> | 0,20 | 1 | 17 (1 multi) | sí |
+>
+> **Bajar el umbral no es la solución.** Solo agrupa por debajo de 0,25, y con 18 artículos no
+> alcanza para descartar que a ese nivel se fusionen hechos distintos que comparten vocabulario
+> financiero genérico. La señal buena está en las entidades, y falla por normalización de
+> nombres, no por umbral. Dos arreglos que atacan la causa:
+>
+> 1. **Coincidencia parcial de apellidos en `EntityNormalizer`**, para que `larrain` y
+>    `pedro pablo larrain` sean la misma entidad. Eso solo ya agrupa el caso Sartor con
+>    `shared_entities_minimum = 1`.
+> 2. **`shared_entities_minimum` a 1** manteniendo el Jaccard alto: que las entidades manden y el
+>    título sea refuerzo, no requisito.
+>
+> Reproducir el experimento: reiniciar a `pending` los artículos de una fuente, correr
+> `NEWS_AI_DRIVER=chain php artisan news:pipeline --skip-scrape` y comparar
+> `Event::count()` contra `Article::count()`.
 
 > **Decisión abierta — artículos que llegan tarde.** Solo se agrupan artículos con `event_id` nulo, y un grupo con un miembro nuevo tiene otro `cluster_key`. Consecuencia: si un medio publica su versión de una historia después de que el acontecimiento ya se creó, se abre un **segundo** acontecimiento sobre el mismo hecho en vez de sumarse al primero. Eso choca de frente con el punto 3 del alcance del MVP ("agrupación de artículos que hablan del mismo acontecimiento"), que es lo que justifica el producto. La alternativa —reutilizar el acontecimiento al que ya pertenece algún miembro— cuesta la inmutabilidad que hoy hace al job seguro ante concurrencia. Hay que elegir.
 
@@ -212,7 +271,11 @@ Migraciones en orden de dependencia:
 - [x] Seeder de demo (`DemoSeeder`) con un par de briefings realistas, por si el scraping falla en vivo durante la presentación. **Plan B obligatorio.** Adelantado a la Semana 1: 13 acontecimientos, 5 ediciones y 6 instrumentos, con fechas relativas a hoy.
 - [ ] `vendor/bin/pint` sobre todo el proyecto.
 - [ ] README actualizado: instalación, configuración de la IA, cómo correr el pipeline a mano.
-- [ ] Confirmar con el profesor el tema Ollama vs. Gemini (ver `CLAUDE.md` §3) y, si corresponde, implementar `GeminiAnalyzer` — con la interfaz ya hecha es ~1 clase.
+- [x] Resuelto el tema del proveedor de IA: **no hay requisito de Gemini**. La capa admite Ollama local y OpenRouter (modelos gratuitos), y encadena ambos. Agregar un `GeminiAnalyzer` seguiría siendo una clase más si alguna vez hace falta.
+- [x] Validada la cadena con una API key real de OpenRouter, sobre 18 artículos chilenos reales (2026-08-13). **Los tres modelos rotaron solos**: `gemma` 15, `gpt-oss` 2, `nemotron` 1 — gemma agotó su cuota gratuita y el respaldo entró sin intervención. Ollama falló las 18 veces (no está instalado) y el cortocircuito lo fue salteando. ~19 s por artículo, 18 de 18 analizados.
+- [x] Calidad del análisis confirmada: con el analizador falso todo caía en `economy`; con modelos reales las categorías salen variadas y correctas (`regulation`, `companies`, `markets`, `monetary`, `commodities`) y las entidades bien extraídas.
+- [ ] **Arreglar la deduplicación entre medios** — ver el bloque rojo de §4.2. Es lo que la validación con IA real dejó al descubierto y es el corazón del MVP.
+- [ ] Reanalizar los 25 artículos de BBC, que todavía tienen análisis del modelo falso (~8 min y consume cuota gratuita).
 - [ ] Guion de la demo: mostrar briefing → abrir un evento con 2+ fuentes → mostrar el enlace original → gráficos de mercado.
 
 ---

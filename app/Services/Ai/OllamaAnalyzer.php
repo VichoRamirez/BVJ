@@ -5,13 +5,12 @@ namespace App\Services\Ai;
 use App\Contracts\NewsAnalyzer;
 use App\Data\AnalysisResult;
 use App\Data\NewsArticleInput;
-use App\Enums\NewsCategory;
-use App\Enums\RelevanceLevel;
 use App\Exceptions\OllamaConfigurationException;
 use App\Exceptions\OllamaInvalidResponseException;
 use App\Exceptions\OllamaNonRetryableStatusException;
 use App\Exceptions\OllamaRetryableStatusException;
 use App\Exceptions\OllamaTransportException;
+use App\Support\AnalysisJsonSchema;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\RequestException;
@@ -35,30 +34,16 @@ class OllamaAnalyzer implements NewsAnalyzer
 
     private const MAX_RESPONSE_BYTES = 10_485_760;
 
-    /** @var array<string, mixed> */
-    private static array $RESPONSE_SCHEMA_CACHE = [];
-
-    /** @return array<string, mixed> */
+    /**
+     * El esquema es compartido con los demás proveedores: si estuviera duplicado
+     * acá, agregar una categoría al enum arreglaría un proveedor y dejaría al
+     * otro exigiendo un enum viejo.
+     *
+     * @return array<string, mixed>
+     */
     private static function getResponseSchema(): array
     {
-        if (self::$RESPONSE_SCHEMA_CACHE === []) {
-            self::$RESPONSE_SCHEMA_CACHE = [
-                'type' => 'object',
-                'additionalProperties' => false,
-                'properties' => [
-                    'summary' => ['type' => 'string'],
-                    'category' => ['type' => 'string', 'enum' => array_column(NewsCategory::cases(), 'value')],
-                    'relevance' => ['type' => 'string', 'enum' => array_column(RelevanceLevel::cases(), 'value')],
-                    'companies' => ['type' => 'array', 'items' => ['type' => 'string']],
-                    'people' => ['type' => 'array', 'items' => ['type' => 'string']],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string']],
-                    'importance_explanation' => ['type' => 'string'],
-                ],
-                'required' => ['summary', 'category', 'relevance', 'companies', 'people', 'tags', 'importance_explanation'],
-            ];
-        }
-
-        return self::$RESPONSE_SCHEMA_CACHE;
+        return AnalysisJsonSchema::get();
     }
 
     /** @var array<string, mixed> */

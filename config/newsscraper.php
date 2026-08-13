@@ -45,6 +45,66 @@ return [
             'max_response_bytes' => (int) env('NEWS_OLLAMA_MAX_RESPONSE_BYTES', 1_048_576),
         ],
 
+        /*
+        | OpenRouter: API compatible con OpenAI, con modelos gratuitos. La clave
+        | se lee solo desde acá, nunca con env() fuera de config, y jamás se
+        | escribe en un log ni en un mensaje de error.
+        |
+        | `model` es el que se usa cuando no se especifica otro; la cadena de
+        | respaldo de abajo puede pedir uno distinto por eslabón.
+        */
+        'openrouter' => [
+            'api_key' => env('OPENROUTER_API_KEY'),
+            'base_url' => env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+            'model' => env('OPENROUTER_MODEL', 'google/gemma-4-26b-a4b-it:free'),
+            // Opcionales: OpenRouter los usa para atribuir el tráfico.
+            'referer' => env('OPENROUTER_SITE_URL'),
+            'title' => env('OPENROUTER_SITE_NAME', 'NewsScraper'),
+            'connect_timeout' => (float) env('OPENROUTER_CONNECT_TIMEOUT', 5),
+            'timeout' => (float) env('OPENROUTER_TIMEOUT', 60),
+            'retry_attempts' => (int) env('OPENROUTER_RETRY_ATTEMPTS', 2),
+            'retry_backoff' => (int) env('OPENROUTER_RETRY_BACKOFF', 500),
+            'max_response_bytes' => (int) env('OPENROUTER_MAX_RESPONSE_BYTES', 1_048_576),
+        ],
+
+        /*
+        |----------------------------------------------------------------------
+        | Cadena de respaldo
+        |----------------------------------------------------------------------
+        |
+        | Con NEWS_AI_DRIVER=chain se prueban estos eslabones en orden y gana el
+        | primero que responda. Sirve para dos cosas a la vez: caerse a la nube
+        | cuando Ollama local no está, y rotar entre modelos gratuitos de
+        | OpenRouter, que tienen cuota baja y devuelven 429 seguido.
+        |
+        | Un eslabón mal configurado (sin API key, sin Ollama instalado) no rompe
+        | la cadena: se salta. Por eso se puede dejar Ollama primero aunque
+        | todavía no esté instalado.
+        |
+        | Los modelos gratuitos listados soportan salida estructurada, que es lo
+        | que hace que el JSON cumpla el esquema. Verificar en
+        | https://openrouter.ai/models antes de cambiarlos: la oferta gratuita rota.
+        |
+        */
+        'chain' => [
+            ['driver' => 'ollama'],
+            ['driver' => 'openrouter', 'model' => 'google/gemma-4-26b-a4b-it:free'],
+            ['driver' => 'openrouter', 'model' => 'openai/gpt-oss-20b:free'],
+            ['driver' => 'openrouter', 'model' => 'nvidia/nemotron-nano-9b-v2:free'],
+        ],
+
+        'fallback' => [
+            'circuit_breaker_failures' => (int) env('NEWS_AI_CIRCUIT_FAILURES', 3),
+            'circuit_breaker_ttl' => (int) env('NEWS_AI_CIRCUIT_TTL', 300),
+
+            /*
+            | Si además hay que cambiar de modelo cuando el JSON viene mal.
+            | Apagado por defecto: una respuesta que no cumple el esquema suele
+            | ser culpa del prompt, y saltar al siguiente modelo lo esconde.
+            */
+            'on_invalid_response' => (bool) env('NEWS_AI_FALLBACK_ON_INVALID', false),
+        ],
+
         'job_tries' => (int) env('NEWS_AI_JOB_TRIES', 4),
         'job_timeout' => (int) env('NEWS_AI_JOB_TIMEOUT', 180),
         'overlap_release_after' => (int) env('NEWS_AI_OVERLAP_RELEASE_AFTER', 30),

@@ -2,4 +2,6 @@
 
 namespace App\Exceptions;
 
-class OllamaTransportException extends NewsAnalysisException {}
+use App\Contracts\AnalyzerUnavailable;
+
+class OllamaTransportException extends NewsAnalysisException implements AnalyzerUnavailable {}

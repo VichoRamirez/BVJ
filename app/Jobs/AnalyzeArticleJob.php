@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Contracts\AnalyzerUnavailable;
 use App\Contracts\NewsAnalyzer;
 use App\Data\NewsArticleInput;
 use App\Enums\AnalysisStatus;
@@ -203,14 +204,21 @@ class AnalyzeArticleJob implements ShouldQueue
             return;
         }
 
+        // Que ningún modelo esté disponible no dice nada del artículo: marcarlo
+        // `failed` lo sacaría del pipeline para siempre por una caída temporal
+        // del proveedor. Vuelve a `pending` y la próxima corrida lo reintenta.
+        $unavailable = $exception instanceof AnalyzerUnavailable;
+
         $updated = Article::query()
             ->whereKey($article->id)
             ->where('analysis_status', '!=', AnalysisStatus::Completed->value)
             ->where('analysis_run_id', $this->runId)
             ->update([
                 'analysis_run_id' => null,
-                'analysis_status' => AnalysisStatus::Failed,
-                'analysis_error' => 'No fue posible completar el análisis.',
+                'analysis_status' => $unavailable ? AnalysisStatus::Pending : AnalysisStatus::Failed,
+                'analysis_error' => $unavailable
+                    ? 'Ningún modelo de análisis disponible; queda pendiente para la próxima corrida.'
+                    : 'No fue posible completar el análisis.',
                 'analysis_started_at' => null,
                 'analysis_completed_at' => null,
             ]);
@@ -223,6 +231,7 @@ class AnalyzeArticleJob implements ShouldQueue
             'article_id' => $article->id,
             'attempts' => $article->analysis_attempts,
             'exception' => $exception::class,
+            'estado_final' => $unavailable ? 'pending' : 'failed',
         ]);
     }
 }

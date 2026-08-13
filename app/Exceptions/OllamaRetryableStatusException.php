@@ -2,4 +2,6 @@
 
 namespace App\Exceptions;
 
-class OllamaRetryableStatusException extends NewsAnalysisException {}
+use App\Contracts\AnalyzerUnavailable;
+
+class OllamaRetryableStatusException extends NewsAnalysisException implements AnalyzerUnavailable {}

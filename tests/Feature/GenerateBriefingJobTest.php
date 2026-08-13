@@ -1,106 +1,166 @@
 <?php
 
 use App\Enums\BriefingEdition;
-use App\Enums\RelevanceLevel;
 use App\Jobs\GenerateBriefingJob;
 use App\Models\Briefing;
 use App\Models\Event;
 use Carbon\CarbonImmutable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 
-/*
- * Publicación de la edición. Nada de esto llama a servicios externos.
- */
-
-function chileNow(): CarbonImmutable
+function generateBriefing(string $date, BriefingEdition $edition = BriefingEdition::Morning): void
 {
-    return CarbonImmutable::now(config('newsscraper.briefing.timezone'));
+    (new GenerateBriefingJob($edition, $date))->handle();
 }
 
-beforeEach(function (): void {
-    // Hora fija a las 20:00 de Chile: pasadas ambas ediciones del día. Sin esto,
-    // el corte del período ("desde el briefing anterior, o 12 horas atrás")
-    // depende de la hora real en que se corran los tests y de madrugada dejaría
-    // fuera los acontecimientos recién creados.
-    $this->travelTo(chileNow()->setTime(20, 0));
+it('genera el briefing con orden y posiciones deterministas', function () {
+    $date = CarbonImmutable::parse('2026-08-12', 'America/Santiago');
+    Event::factory()->create(['relevance_score' => 401, 'first_seen_at' => $date->setTime(5, 0)->utc()]);
+    Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(6, 0)->utc()]);
+
+    generateBriefing($date->toDateString());
+
+    $briefing = Briefing::with('events')->firstOrFail();
+    expect($briefing->edition)->toBe(BriefingEdition::Morning)
+        ->and($briefing->published_on->toDateString())->toBe('2026-08-12')
+        ->and($briefing->published_at->toImmutable()->utc()->toDateTimeString())->toBe('2026-08-12 11:00:00')
+        ->and($briefing->events->pluck('relevance_score')->all())->toBe([401, 301])
+        ->and($briefing->events->pluck('pivot.position')->all())->toBe([1, 2]);
 });
 
-it('publica la edición con los acontecimientos más relevantes del período', function () {
-    config(['newsscraper.briefing.events_per_edition' => 3]);
+it('desempata por fecha descendente y luego por id ascendente', function () {
+    $date = CarbonImmutable::parse('2026-08-12', 'America/Santiago');
+    $older = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(5, 0)->utc()]);
+    $newer = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(6, 0)->utc()]);
+    $sameTime = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(6, 0)->utc()]);
 
-    $critical = Event::factory()->critical()->create(['first_seen_at' => now()->subHours(2)]);
-    $high = Event::factory()->withRelevance(RelevanceLevel::High)->create(['first_seen_at' => now()->subHours(3)]);
-    $medium = Event::factory()->withRelevance(RelevanceLevel::Medium)->create(['first_seen_at' => now()->subHours(4)]);
-    Event::factory()->withRelevance(RelevanceLevel::Low)->create(['first_seen_at' => now()->subHours(5)]);
+    generateBriefing($date->toDateString());
 
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-
-    $briefing = Briefing::query()->with('events')->sole();
-
-    expect($briefing->edition)->toBe(BriefingEdition::Evening)
-        // Baja queda fuera por el umbral de config, y el orden es por relevancia.
-        ->and($briefing->events->pluck('id')->all())->toBe([$critical->id, $high->id, $medium->id]);
+    expect(Briefing::with('events')->firstOrFail()->events->pluck('id')->all())
+        ->toBe([$newer->id, $sameTime->id, $older->id]);
 });
 
-it('fecha la edición en la hora programada, no en la hora en que corrió', function () {
-    Event::factory()->critical()->create(['first_seen_at' => now()->subHour()]);
+it('aplica umbral, limite y ventana semiabierta', function () {
+    config()->set('newsscraper.relevance.minimum_for_briefing', 'high');
+    config()->set('newsscraper.briefing.events_per_edition', 2);
+    $date = CarbonImmutable::parse('2026-08-12', 'America/Santiago');
+    $previous = Briefing::factory()->morning()->on($date->subDay())->create([
+        'published_at' => '2026-08-11 10:00:00',
+    ]);
+    $included = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => '2026-08-11 12:00:00']);
+    $atStart = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => '2026-08-11 10:00:00']);
+    $atEnd = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => '2026-08-12 11:00:00']);
+    $belowThreshold = Event::factory()->create(['relevance_score' => 200, 'first_seen_at' => '2026-08-11 12:00:00']);
 
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Morning));
+    generateBriefing($date->toDateString());
 
-    $publishedAt = Briefing::query()->sole()->published_at
-        ->timezone(config('newsscraper.briefing.timezone'));
+    $briefing = Briefing::query()->whereDate('published_on', $date)->with('events')->firstOrFail();
 
-    expect($publishedAt->hour)->toBe(BriefingEdition::Morning->scheduledHour())
-        ->and($publishedAt->minute)->toBe(0);
+    expect($briefing->events->pluck('id')->all())->toBe([$included->id, $atStart->id])
+        ->and($briefing->events->pluck('pivot.position')->all())->toBe([1, 2])
+        ->and($briefing->events->pluck('id')->all())->not->toContain($atEnd->id)
+        ->and($briefing->events->pluck('id')->all())->not->toContain($belowThreshold->id)
+        ->and($briefing->events)->toHaveCount(2);
 });
 
-it('respeta el tope de acontecimientos por edición', function () {
-    config(['newsscraper.briefing.events_per_edition' => 2]);
+it('usa las últimas 24 horas en la primera edición', function () {
+    $date = CarbonImmutable::parse('2026-08-12', 'America/Santiago');
+    $inside = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(22, 0)->subDay()->utc()]);
+    Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(16, 0)->subDay()->utc()]);
 
-    Event::factory()->critical()->count(5)->create(['first_seen_at' => now()->subHour()]);
+    generateBriefing($date->toDateString(), BriefingEdition::Evening);
 
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-
-    expect(Briefing::query()->with('events')->sole()->events)->toHaveCount(2);
+    expect(Briefing::with('events')->firstOrFail()->events->pluck('id')->all())->toBe([$inside->id]);
 });
 
-it('no publica una edición vacía', function () {
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Morning));
+it('no crea briefing sin eventos y es idempotente sin modificarlo', function () {
+    $date = CarbonImmutable::parse('2026-08-12', 'America/Santiago');
+    generateBriefing($date->toDateString());
+    expect(Briefing::count())->toBe(0);
 
-    expect(Briefing::query()->count())->toBe(0);
+    $event = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(6, 0)->utc()]);
+    generateBriefing($date->toDateString());
+    $briefing = Briefing::firstOrFail();
+    $publishedAt = $briefing->published_at;
+    generateBriefing($date->toDateString());
+
+    expect(Briefing::count())->toBe(1)
+        ->and($briefing->fresh()->published_at->equalTo($publishedAt))->toBeTrue()
+        ->and($briefing->fresh()->events->first()->id)->toBe($event->id);
 });
 
-it('deja fuera los acontecimientos bajo el umbral de relevancia', function () {
-    Event::factory()->withRelevance(RelevanceLevel::Low)->count(3)->create(['first_seen_at' => now()->subHour()]);
+it('calcula fecha editorial explícita en timezone y oculta publicaciones futuras', function () {
+    $date = CarbonImmutable::parse('2026-11-01', 'America/Santiago');
+    $event = Event::factory()->create(['relevance_score' => 301, 'first_seen_at' => $date->setTime(4, 0)->utc()]);
+    generateBriefing($date->toDateString(), BriefingEdition::Evening);
+    $briefing = Briefing::firstOrFail();
 
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-
-    expect(Briefing::query()->count())->toBe(0);
+    expect($briefing->published_on->toDateString())->toBe('2026-11-01')
+        ->and($briefing->published_at->toImmutable()->utc()->toDateTimeString())->toBe('2026-11-01 21:00:00')
+        ->and(Briefing::query()->published()->pluck('id')->all())->toBeEmpty();
 });
 
-it('no repite en la tarde lo que ya salió en la mañana', function () {
-    $morningEvent = Event::factory()->critical()->create([
-        'first_seen_at' => chileNow()->setTime(6, 0),
+it('valida configuración inválida y expone overlap específico', function () {
+    config()->set('newsscraper.relevance.minimum_for_briefing', 'invalid');
+    expect(fn () => generateBriefing('2026-08-12'))
+        ->toThrow(InvalidArgumentException::class);
+
+    config()->set('newsscraper.relevance.minimum_for_briefing', 'medium');
+    config()->set('newsscraper.briefing.events_per_edition', 256);
+    expect(fn () => generateBriefing('2026-08-12'))
+        ->toThrow(InvalidArgumentException::class);
+
+    config()->set('newsscraper.briefing.events_per_edition', 0);
+    expect(fn () => generateBriefing('2026-08-12'))
+        ->toThrow(InvalidArgumentException::class);
+
+    config()->set('newsscraper.briefing.events_per_edition', 7);
+    config()->set('newsscraper.briefing.timezone', 'not-a-timezone');
+    expect(fn () => generateBriefing('2026-08-12'))
+        ->toThrow(InvalidArgumentException::class, 'Invalid briefing timezone');
+
+    $job = new GenerateBriefingJob(BriefingEdition::Morning, '2026-08-12');
+    expect($job->tries)->toBe(3)
+        ->and($job->timeout)->toBe(120)
+        ->and($job->overlapReleaseAfter)->toBeGreaterThanOrEqual($job->timeout)
+        ->and($job->overlapTtl)->toBeGreaterThan($job->timeout)
+        ->and($job->middleware()[0])->toBeInstanceOf(WithoutOverlapping::class);
+});
+
+it('rechaza fechas editoriales con formato o calendario inválido', function (string $date, string $message) {
+    expect(fn () => new GenerateBriefingJob(BriefingEdition::Morning, $date))
+        ->toThrow(InvalidArgumentException::class, $message);
+})->with([
+    ['2026-02-30', 'Invalid editorial date'],
+    ['2026-2-03', 'Y-m-d format'],
+    ['2026-13-01', 'Invalid editorial date'],
+]);
+
+it('mantiene retry_after por encima de los timeouts relevantes', function () {
+    $retryAfter = (int) config('queue.connections.database.retry_after');
+    $redisRetryAfter = (int) config('queue.connections.redis.retry_after');
+    $beanstalkRetryAfter = (int) config('queue.connections.beanstalkd.retry_after');
+    $largestTimeout = max(
+        (int) config('newsscraper.ai.job_timeout'),
+        (int) config('newsscraper.clustering.job_timeout'),
+        (int) config('newsscraper.briefing.job_timeout'),
+    );
+
+    expect($retryAfter)->toBeGreaterThan($largestTimeout + 30);
+    expect($redisRetryAfter)->toBeGreaterThan($largestTimeout + 30)
+        ->and($beanstalkRetryAfter)->toBeGreaterThan($largestTimeout + 30);
+});
+
+it('mantiene la fecha editorial civil cerca de medianoche y durante DST', function () {
+    config()->set('newsscraper.briefing.timezone', 'America/Santiago');
+    $event = Event::factory()->create([
+        'relevance_score' => 301,
+        'first_seen_at' => '2026-10-31 23:30:00',
     ]);
 
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Morning));
+    generateBriefing('2026-11-01', BriefingEdition::Morning);
 
-    $eveningEvent = Event::factory()->critical()->create([
-        'first_seen_at' => chileNow()->setTime(12, 0),
-    ]);
-
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-
-    $evening = Briefing::query()->where('edition', BriefingEdition::Evening)->with('events')->sole();
-
-    expect($evening->events->pluck('id')->all())->toBe([$eveningEvent->id])
-        ->and($evening->events->pluck('id'))->not->toContain($morningEvent->id);
-});
-
-it('es idempotente: reeditar la misma edición no crea otra fila', function () {
-    Event::factory()->critical()->create(['first_seen_at' => now()->subHour()]);
-
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-    dispatch_sync(new GenerateBriefingJob(BriefingEdition::Evening));
-
-    expect(Briefing::query()->count())->toBe(1);
+    $briefing = Briefing::with('events')->firstOrFail();
+    expect($briefing->published_on->toDateString())->toBe('2026-11-01')
+        ->and($briefing->published_at->toImmutable()->utc()->toDateTimeString())->toBe('2026-11-01 10:00:00')
+        ->and($briefing->events->pluck('id')->all())->toBe([$event->id]);
 });

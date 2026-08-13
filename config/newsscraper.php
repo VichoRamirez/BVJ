@@ -94,6 +94,13 @@ return [
     'briefing' => [
         'events_per_edition' => (int) env('NEWS_EVENTS_PER_BRIEFING', 7),
         'timezone' => 'America/Santiago',
+        'job_tries' => (int) env('NEWS_BRIEFING_JOB_TRIES', 3),
+        'job_timeout' => (int) env('NEWS_BRIEFING_JOB_TIMEOUT', 120),
+        'overlap_release_after' => (int) env('NEWS_BRIEFING_OVERLAP_RELEASE_AFTER', 120),
+        'overlap_ttl' => max(
+            (int) env('NEWS_BRIEFING_OVERLAP_TTL', 151),
+            (int) env('NEWS_BRIEFING_JOB_TIMEOUT', 120) + 31,
+        ),
     ],
 
     /*

@@ -7,139 +7,151 @@ use App\Enums\RelevanceLevel;
 use App\Models\Briefing;
 use App\Models\Event;
 use Carbon\CarbonImmutable;
+use DateTimeZone;
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
-/**
- * Publica la edición del período con los acontecimientos más relevantes.
- *
- * El corte del período es "desde el briefing anterior": lo que ya salió en la
- * edición de la mañana no se repite en la de la tarde. Si no hay briefing
- * previo (primera corrida), se toman las últimas doce horas.
- *
- * Una edición vacía no se publica. Es preferible que la portada siga mostrando
- * el briefing anterior a que muestre uno nuevo sin contenido.
- */
 class GenerateBriefingJob implements ShouldQueue
 {
-    use Queueable;
+    use Dispatchable, Queueable;
 
-    public int $tries = 1;
+    public int $tries;
 
-    public function __construct(public readonly BriefingEdition $edition) {}
+    public int $timeout;
+
+    public int $overlapReleaseAfter;
+
+    public int $overlapTtl;
+
+    public function __construct(
+        public readonly BriefingEdition $edition,
+        public readonly string $editorialDate,
+    ) {
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $editorialDate)) {
+            throw new InvalidArgumentException('editorialDate must use the Y-m-d format.');
+        }
+
+        try {
+            [$year, $month, $day] = array_map('intval', explode('-', $editorialDate));
+            /** @var CarbonImmutable $validatedDate */
+            $validatedDate = CarbonImmutable::createSafe($year, $month, $day, 0, 0, 0, 'UTC');
+        } catch (\Throwable $exception) {
+            throw new InvalidArgumentException("Invalid editorial date: {$editorialDate}.", previous: $exception);
+        }
+
+        $this->tries = max((int) config('newsscraper.briefing.job_tries', 3), 3);
+        $this->timeout = max((int) config('newsscraper.briefing.job_timeout', 120), 30);
+        $this->overlapReleaseAfter = max(
+            (int) config('newsscraper.briefing.overlap_release_after', $this->timeout),
+            $this->timeout,
+        );
+        $this->overlapTtl = max(
+            (int) config('newsscraper.briefing.overlap_ttl', $this->timeout + 31),
+            $this->timeout + 31,
+        );
+    }
+
+    /**
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            (new WithoutOverlapping('briefing:'.$this->edition->value.':'.$this->editorialDate))
+                ->shared()
+                ->releaseAfter($this->overlapReleaseAfter)
+                ->expireAfter($this->overlapTtl),
+        ];
+    }
 
     public function handle(): void
     {
-        $scheduled = $this->publicationTime();
-        // Se guarda en UTC y se muestra en horario de Chile (CLAUDE.md §4). El
-        // cast de Eloquent formatea la fecha sin convertir la zona, así que la
-        // conversión tiene que ser explícita: sin esto, las 07:00 de Chile
-        // quedarían escritas como 07:00 UTC, o sea las 03:00 acá.
-        $publishedAt = $scheduled->utc();
-        $events = $this->eventsForPeriod($publishedAt);
+        $localDate = $this->editorialDateInConfiguredTimezone();
+        $publishedAt = $localDate->setTime($this->edition->scheduledHour(), 0)->utc();
 
-        if ($events->isEmpty()) {
-            Log::warning('No hay acontecimientos suficientes para publicar la edición.', [
-                'edition' => $this->edition->value,
-                'published_at' => $publishedAt->toIso8601String(),
-            ]);
+        $minimum = RelevanceLevel::tryFrom((string) config('newsscraper.relevance.minimum_for_briefing'));
+        if ($minimum === null) {
+            throw new InvalidArgumentException('Invalid minimum_for_briefing relevance level.');
+        }
 
+        $limit = (int) config('newsscraper.briefing.events_per_edition');
+        if ($limit < 1 || $limit > 255) {
+            throw new InvalidArgumentException('events_per_edition must be between 1 and 255.');
+        }
+
+        if (Briefing::query()
+            ->whereDate('published_on', $localDate)
+            ->where('edition', $this->edition->value)
+            ->exists()) {
             return;
         }
 
-        DB::transaction(function () use ($events, $scheduled, $publishedAt): void {
-            $briefing = $this->editionOf($scheduled);
-            $briefing->fill(['published_at' => $publishedAt])->save();
-
-            $briefing->events()->sync(
-                $events->values()
-                    ->mapWithKeys(fn (Event $event, int $index): array => [
-                        $event->id => ['position' => $index + 1],
-                    ])
-                    ->all()
-            );
-        });
-
-        Log::info('Briefing publicado.', [
-            'edition' => $this->edition->value,
-            'events' => $events->count(),
-        ]);
-    }
-
-    /**
-     * La hora programada de la edición en horario de Chile, no la hora en que
-     * corrió el job: si el scheduler se atrasa cinco minutos, la edición de las
-     * 07:00 sigue siendo la de las 07:00.
-     *
-     * Es pública y estática porque `news:pipeline` necesita la misma cuenta para
-     * saber si esta corrida publicó algo, y duplicar la fórmula sería garantizar
-     * que las dos se desincronicen.
-     */
-    public static function scheduledAt(BriefingEdition $edition): CarbonImmutable
-    {
-        return CarbonImmutable::now(config('newsscraper.briefing.timezone'))
-            ->setTime($edition->scheduledHour(), 0);
-    }
-
-    private function publicationTime(): CarbonImmutable
-    {
-        return static::scheduledAt($this->edition);
-    }
-
-    /**
-     * La fila de esta edición, existente o nueva.
-     *
-     * No se usa `updateOrCreate` porque el cast `date` escribe `published_on`
-     * con formato de fecha y hora: buscar por la igualdad "2026-08-12" nunca
-     * encuentra el "2026-08-12 00:00:00" que quedó guardado, y el insert choca
-     * contra el unique. Por eso la búsqueda va con `whereDate` (mismo motivo que
-     * `Briefing::scopeSameDayAs`).
-     */
-    private function editionOf(CarbonImmutable $scheduled): Briefing
-    {
-        return Briefing::query()
-            ->whereDate('published_on', $scheduled->toDateString())
-            ->where('edition', $this->edition)
-            ->first()
-            ?? new Briefing([
-                'published_on' => $scheduled->toDateString(),
-                'edition' => $this->edition,
-            ]);
-    }
-
-    /**
-     * @return Collection<int, Event>
-     */
-    private function eventsForPeriod(CarbonImmutable $publishedAt): Collection
-    {
-        $previous = Briefing::query()
+        $previousPublishedAt = Briefing::query()
+            ->where('edition', $this->edition->value)
             ->where('published_at', '<', $publishedAt)
-            ->latest('published_at')
-            ->first();
+            ->max('published_at');
+        $start = $previousPublishedAt === null
+            ? $publishedAt->subDay()
+            : CarbonImmutable::parse($previousPublishedAt, 'UTC');
 
-        $since = $previous?->published_at ?? $publishedAt->subHours(12);
-        $minimumScore = $this->minimumScore();
-
-        return Event::query()
-            ->where('first_seen_at', '>=', $since)
-            ->where('relevance_score', '>=', $minimumScore)
-            ->mostRelevant()
-            ->limit((int) config('newsscraper.briefing.events_per_edition', 7))
+        $events = Event::query()
+            ->where('first_seen_at', '>=', $start)
+            ->where('first_seen_at', '<', $publishedAt)
+            ->where('relevance_score', '>=', $minimum->weight() * 100)
+            ->orderByDesc('relevance_score')
+            ->orderByDesc('first_seen_at')
+            ->orderBy('id')
+            ->limit($limit)
             ->get();
+
+        if ($events->isEmpty()) {
+            return;
+        }
+
+        try {
+            DB::transaction(function () use ($events, $localDate, $publishedAt): void {
+                $briefing = Briefing::query()->create([
+                    'edition' => $this->edition,
+                    'published_on' => $localDate,
+                    'published_at' => $publishedAt,
+                ]);
+
+                $briefing->events()->attach($events->mapWithKeys(
+                    fn (Event $event, int $index): array => [$event->id => ['position' => $index + 1]],
+                )->all());
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            if (! Briefing::query()
+                ->whereDate('published_on', $localDate)
+                ->where('edition', $this->edition->value)
+                ->exists()) {
+                throw $exception;
+            }
+        }
     }
 
-    /**
-     * El umbral vive como nivel legible en config y se traduce acá al entero
-     * con que se ordena en SQL (ver Event::scoreFor()).
-     */
-    private function minimumScore(): int
+    private function editorialDateInConfiguredTimezone(): CarbonImmutable
     {
-        $level = RelevanceLevel::tryFrom((string) config('newsscraper.relevance.minimum_for_briefing', 'medium'))
-            ?? RelevanceLevel::Medium;
+        $timezone = (string) config('newsscraper.briefing.timezone');
 
-        return $level->weight() * 100;
+        try {
+            new DateTimeZone($timezone);
+            [$year, $month, $day] = array_map('intval', explode('-', $this->editorialDate));
+
+            /** @var CarbonImmutable $localDate */
+            $localDate = CarbonImmutable::createSafe($year, $month, $day, 0, 0, 0, $timezone);
+
+            return $localDate;
+        } catch (\Throwable $exception) {
+            throw new InvalidArgumentException(
+                "Invalid briefing timezone or editorial date: {$timezone} / {$this->editorialDate}.",
+                previous: $exception,
+            );
+        }
     }
 }

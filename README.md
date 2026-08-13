@@ -95,9 +95,23 @@ touch database/database.sqlite
 php artisan migrate --seed
 ```
 
-El `--seed` carga las fuentes del MVP y el contenido de demostración (`DemoSeeder`): 13
-acontecimientos, 5 ediciones y 6 instrumentos de mercado, con fechas relativas a hoy. Es
-idempotente, se puede volver a correr sin duplicar nada.
+El `--seed` carga **solo las fuentes del MVP**. Las noticias las trae el pipeline real; para
+llenar la aplicación, corre `php artisan news:pipeline`.
+
+Si necesitas datos sin salir a la red —o si el scraping o la IA fallan en vivo durante la
+presentación— está el plan B:
+
+```bash
+php artisan db:seed --class=DemoSeeder
+```
+
+Carga 13 acontecimientos, 5 ediciones y 6 instrumentos de mercado, con fechas relativas a hoy.
+Es idempotente: se puede volver a correr sin duplicar nada. **No se siembra por defecto** para
+que en la portada no se mezclen noticias reales con contenido inventado.
+
+> **`migrate:fresh` borra los análisis.** Cada artículo analizado costó llamadas a la API, y
+> `migrate:fresh` tira todas las tablas. Para cambios de esquema usa `php artisan migrate`. El
+> pipeline nunca reanaliza lo que ya está `completed`, así que re-scrapear es gratis.
 
 Alternativamente, `composer run setup` ejecuta estos pasos automáticamente.
 
@@ -245,6 +259,8 @@ A mano:
 php artisan news:pipeline --edition=morning   # corrida completa
 php artisan news:pipeline --skip-scrape       # analizar y publicar lo que ya está en la base
 php artisan news:scrape --source=diario-financiero --sync
+php artisan news:analyze --limit=10           # analizar de a poco
+php artisan news:analyze --retry-failed       # recuperar los análisis fallidos
 php artisan news:markets                      # solo las cotizaciones
 php artisan schedule:list                     # ver los horarios registrados
 ```
@@ -252,6 +268,11 @@ php artisan schedule:list                     # ver los horarios registrados
 Las cuatro etapas del pipeline corren **en orden dentro del proceso del comando**, no repartidas
 en la cola: agrupar antes de que terminen los análisis produciría acontecimientos incompletos.
 `news:scrape`, en cambio, encola por defecto (usa `--sync` si no tienes un worker levantado).
+
+`news:analyze` es la **única** forma de recuperar un análisis fallido: `news:pipeline` solo toma
+los `pending`, y volver a scrapear tampoco reencola —un artículo que ya existe y no está
+`pending` se salta a propósito, para no repetir llamadas que ya se pagaron—. Con `--retry-failed`
+vuelven a la cola; `--limit` sirve para no agotar la cuota gratuita de una sola vez.
 
 ### Arañas (spiders)
 
@@ -302,7 +323,8 @@ HTML), agregar la clase a `scraping.spiders`, el host a `scraping.allowed_hosts`
 ## Rutas
 
 Los controladores leen de la base de datos con eager loading; ninguna vista hace llamadas
-externas. Mientras no exista el pipeline, los datos los pone `DemoSeeder`.
+externas. Los datos los escribe el pipeline (`php artisan news:pipeline`); con la base recién
+migrada las rutas muestran su estado vacío, no un error.
 
 | Ruta | Nombre | Contenido |
 |---|---|---|

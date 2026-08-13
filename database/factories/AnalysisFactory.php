@@ -35,13 +35,16 @@ class AnalysisFactory extends Factory
             'relevance' => $relevance,
             'importance_explanation' => $importance,
             'raw_response' => [
-                'resumen' => $summary,
-                'categoria' => $category->value,
-                'relevancia' => $relevance->value,
-                'empresas' => [fake()->company()],
-                'personas' => [fake()->name()],
-                'etiquetas' => fake()->words(3),
-                'importancia_economica' => $importance,
+                'content' => $summary,
+                'payload' => [
+                    'summary' => $summary,
+                    'category' => $category->value,
+                    'relevance' => $relevance->value,
+                    'companies' => [fake()->company()],
+                    'people' => [fake()->name()],
+                    'tags' => fake()->words(3),
+                    'importance_explanation' => $importance,
+                ],
             ],
             'analyzed_at' => now(),
         ];

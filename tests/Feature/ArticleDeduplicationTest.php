@@ -1,5 +1,6 @@
 <?php
 
+use App\Exceptions\InvalidArticleUrlException;
 use App\Models\Article;
 use App\Models\Source;
 use App\Support\CanonicalUrl;
@@ -46,6 +47,27 @@ it('no duplica filas al reprocesar el mismo artículo', function () {
 
     expect(Article::count())->toBe(1)
         ->and(Article::first()->title)->toBe('Titular corregido');
+});
+
+it('rechaza esquemas no HTTP y URLs sin host antes de persistir', function (string $url) {
+    expect(fn () => Article::factory()->create(['url' => $url]))
+        ->toThrow(InvalidArticleUrlException::class);
+})->with([
+    'javascript' => 'javascript:alert(1)',
+    'missing host' => 'https:///noticia',
+]);
+
+it('acepta una URL HTTP válida en el modelo', function () {
+    $article = Article::factory()->create(['url' => 'http://example.com/noticia']);
+
+    expect($article->url_hash)->toBe(CanonicalUrl::hash($article->url));
+});
+
+it('rechaza credenciales embebidas en la URL del artículo', function () {
+    foreach (['https://user@example.com/noticia', 'https://:secret@example.com/noticia', 'https://user:secret@example.com/noticia'] as $url) {
+        expect(fn () => Article::factory()->create(['url' => $url]))
+            ->toThrow(InvalidArticleUrlException::class);
+    }
 });
 
 it('recalcula el hash aunque le pasen uno equivocado', function () {

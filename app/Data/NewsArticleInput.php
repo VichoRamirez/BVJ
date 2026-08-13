@@ -44,8 +44,8 @@ readonly class NewsArticleInput
 
             $parsedUrl = parse_url($url);
 
-            if (($parsedUrl['scheme'] ?? null) !== 'https' || empty($parsedUrl['host'])) {
-                throw new InvalidArticleUrlException('La URL del artículo debe usar HTTPS y tener un host válido.');
+            if ($parsedUrl === false || ! in_array(strtolower((string) ($parsedUrl['scheme'] ?? '')), ['http', 'https'], true) || empty($parsedUrl['host']) || array_key_exists('user', $parsedUrl) || array_key_exists('pass', $parsedUrl)) {
+                throw new InvalidArticleUrlException('La URL del artículo debe usar HTTP o HTTPS, tener un host válido y no incluir credenciales.');
             }
         }
     }

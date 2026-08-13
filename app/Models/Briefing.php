@@ -55,6 +55,20 @@ class Briefing extends Model
     }
 
     /**
+     * Solo las ediciones cuya hora de publicación ya pasó.
+     *
+     * El seeder y el pipeline crean la edición de la tarde con hora 18:00 el
+     * mismo día, así que sin este filtro la portada de la mañana mostraría un
+     * briefing que todavía no se publica.
+     *
+     * @param  Builder<static>  $query
+     */
+    public function scopePublished(Builder $query): void
+    {
+        $query->where('published_at', '<=', now());
+    }
+
+    /**
      * Las otras ediciones del mismo día, para la barra AM/PM.
      *
      * Va con `whereDate()` y no con una igualdad: el cast `date` escribe el

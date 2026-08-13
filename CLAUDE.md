@@ -196,7 +196,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Backend | Laravel 13 + **PHP 8.4 o superior**. `composer.json` dice `^8.3`, pero es letra muerta: el `composer.lock` resuelto trae `symfony/*` 8.1 (`php >=8.4.1`) y `pestphp/pest ^5` (`php ^8.4`, PHPUnit 13). **En PHP 8.3 el `composer install` falla.** |
 | Base de datos | SQLite (`database/database.sqlite`) |
 | Scraping | ⚠️ **Sin resolver.** [Roach PHP](https://roach-php.dev/docs/introduction) era la decisión, pero `roach-php/laravel` no soporta Laravel 13. Alternativas y criterio de decisión en `PLAN.md §3.1` |
-| LLM | Ollama Cloud vía HTTP (`OLLAMA_API_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`) |
+| LLM | Ollama **local** vía HTTP en `127.0.0.1` o `[::1]` (`NEWS_OLLAMA_BASE_URL`, `NEWS_OLLAMA_MODEL`). `OllamaAnalyzer` rechaza cualquier otro host, así que **Ollama Cloud quedó fuera** — ver la discrepancia en §3 |
 | Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
 | Gráficos | SVG en línea con los tokens `--color-series-*` (`<x-sparkline>`). `laravel-charts` se descartó: última versión de 2023 y sin restricciones declaradas en su `composer.json` |
 | Frontend | Blade + Tailwind CSS 4 + Vite (sin SPA, sin framework JS) |
@@ -204,7 +204,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 | Tests | Pest 5 |
 | Formato | Laravel Pint |
 
-**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. Driver por defecto: Ollama. Antes de la entrega hay que confirmar con el profesor cuál corre en la demo.
+**Discrepancia conocida y sin resolver:** la pauta del curso en la sección 7 de la propuesta dice *"El proyecto debe integrar una IA con la API de Google Gemini (plan gratis)"*, pero el equipo eligió Ollama local y el `.env.example` ya está configurado para Ollama. **Por eso la capa de IA se implementa detrás de una interfaz (`Contracts\NewsAnalyzer`) con drivers intercambiables**, de modo que agregar un `GeminiAnalyzer` sea cambiar una variable de entorno y no reescribir el pipeline. El driver Ollama actual solo permite URLs HTTP loopback; no hay soporte cloud ni API keys.
 
 ## 4. Reglas de trabajo
 

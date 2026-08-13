@@ -19,14 +19,13 @@
 
         @if ($markets->isEmpty())
             <div class="py-8">
-                <x-empty-state title="Todavía no hay datos de mercado" icon="layers">
-                    La próxima corrida del pipeline captura los precios de los instrumentos seguidos.
+                <x-empty-state title="Todavía no hay datos de mercado" icon="chart">
+                    Las cotizaciones aparecerán aquí cuando termine la próxima captura del mercado.
                 </x-empty-state>
             </div>
         @else
-
-        <div class="overflow-x-auto py-8">
-            <table class="w-full min-w-[40rem] text-left">
+            <div class="overflow-x-auto py-8">
+                <table class="w-full min-w-[40rem] text-left">
                 <caption class="sr-only">Instrumentos seguidos, con su precio, variación diaria y tendencia de las últimas diez sesiones</caption>
                 <thead>
                     <tr class="border-b-2 border-rule">
@@ -60,15 +59,14 @@
                         </tr>
                     @endforeach
                 </tbody>
-            </table>
-        </div>
+                </table>
+            </div>
+        @endif
 
         <p class="max-w-[62ch] pb-10 text-xs text-muted">
             Los gráficos son SVG en línea, dibujados con los tokens de serie del sistema de diseño.
             No dependen de JavaScript ni de una librería externa.
         </p>
-
-        @endif
 
     </div>
 </x-layouts.app>

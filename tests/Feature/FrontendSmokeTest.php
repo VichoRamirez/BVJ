@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\BriefingEdition;
 use App\Enums\NewsCategory;
 use App\Models\Briefing;
 use App\Models\Event;
@@ -16,7 +17,8 @@ it('renderiza las rutas principales', function (string $url) {
 
     $this->get($url)
         ->assertSuccessful()
-        ->assertSee('NewsScraper', escape: false);
+        ->assertSee('News', escape: false)
+        ->assertSee('Scraper', escape: false);
 })->with([
     'portada' => '/',
     'histórico de briefings' => '/briefings',
@@ -33,6 +35,26 @@ it('muestra el último briefing en la portada', function () {
         ->assertSee($briefing->edition->label())
         ->assertSee($briefing->events->first()->title)
         ->assertSee('Los resúmenes de esta página los genera un modelo de lenguaje');
+});
+
+it('no muestra una edición futura como último briefing', function () {
+    seedDemo();
+
+    $morning = Briefing::query()
+        ->where('edition', BriefingEdition::Morning)
+        ->latest('published_at')
+        ->first();
+
+    // Una hora después de la edición de la mañana, la de la tarde del mismo día
+    // todavía no se publicó: la portada no puede adelantarla.
+    $this->travelTo($morning->published_at->addHour());
+
+    $this->get('/')
+        ->assertSuccessful()
+        ->assertSee($morning->edition->label());
+
+    expect(Briefing::query()->published()->latest('published_at')->first()->id)
+        ->toBe($morning->id);
 });
 
 it('muestra el estado vacío cuando no hay ningún briefing publicado', function () {
@@ -86,7 +108,7 @@ it('filtra acontecimientos por categoría', function () {
 
     $category = NewsCategory::Monetary;
 
-    $response = $this->get("/categorias/{$category->value}")->assertSuccessful();
+    $response = $this->get("/categorias/{$category->slug()}")->assertSuccessful();
 
     $events = Event::query()->where('category', $category)->get();
 

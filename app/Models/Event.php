@@ -91,8 +91,8 @@ class Event extends Model
      * Del más relevante al menos relevante.
      *
      * El orden va sobre `relevance_score` (entero) y no sobre `relevance`, que
-     * guarda un slug en español y ordenaría alfabéticamente: 'alta' < 'baja' <
-     * 'critica' < 'media'.
+     * guarda el valor del enum y ordenaría alfabéticamente: 'critical' < 'high'
+     * < 'low' < 'medium', que no significa nada.
      *
      * @param  Builder<static>  $query
      */

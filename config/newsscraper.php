@@ -23,17 +23,23 @@ return [
     | App\Contracts\NewsAnalyzer. Agregar un GeminiAnalyzer es sumar una clase
     | y cambiar NEWS_AI_DRIVER, sin tocar el pipeline (ver CLAUDE.md §3).
     |
+    | El bloque `ollama` lo consume App\Services\Ai\OllamaAnalyzer, que valida
+    | estas claves al construirse y solo acepta un host local. No renombrarlas
+    | sin ajustar ese servicio.
+    |
     */
 
     'ai' => [
-        'driver' => env('NEWS_AI_DRIVER', 'ollama'),
+        'driver' => env('NEWS_AI_DRIVER', 'unconfigured'),
 
         'ollama' => [
-            'url' => env('OLLAMA_API_URL', 'https://ollama.com/api/chat'),
-            'key' => env('OLLAMA_API_KEY'),
-            'model' => env('OLLAMA_MODEL', 'gpt-oss:20b-cloud'),
-            'timeout' => (int) env('OLLAMA_TIMEOUT', 60),
-            'retries' => (int) env('OLLAMA_RETRIES', 1),
+            'base_url' => env('NEWS_OLLAMA_BASE_URL', 'http://127.0.0.1:11434'),
+            'model' => env('NEWS_OLLAMA_MODEL', 'llama3.2:3b'),
+            'connect_timeout' => (float) env('NEWS_OLLAMA_CONNECT_TIMEOUT', 3),
+            'timeout' => (float) env('NEWS_OLLAMA_TIMEOUT', 60),
+            'retry_attempts' => (int) env('NEWS_OLLAMA_RETRY_ATTEMPTS', 2),
+            'retry_backoff' => (int) env('NEWS_OLLAMA_RETRY_BACKOFF', 100),
+            'max_response_bytes' => (int) env('NEWS_OLLAMA_MAX_RESPONSE_BYTES', 1_048_576),
         ],
     ],
 
@@ -43,16 +49,15 @@ return [
     |--------------------------------------------------------------------------
     |
     | relevance_score = RelevanceLevel::weight() * 100
-    |                 + min(fuentes distintas, max_source_bonus / source_bonus) * source_bonus
+    |                 + min(fuentes distintas * source_bonus, max_source_bonus)
     |
-    | Es un entero para poder ordenar en SQL: la columna `relevance` guarda un
-    | slug en español ('baja'|'media'|'alta'|'critica') y ordenarla
-    | alfabéticamente no significa nada.
+    | Es un entero para poder ordenar en SQL: la columna `relevance` guarda el
+    | valor del enum y ordenarlo alfabéticamente no significa nada.
     |
     */
 
     'relevance' => [
-        'minimum_for_briefing' => env('NEWS_MIN_RELEVANCE', 'media'),
+        'minimum_for_briefing' => env('NEWS_MIN_RELEVANCE', 'medium'),
         'source_bonus' => 5,
         'max_source_bonus' => 25,
     ],

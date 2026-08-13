@@ -4,17 +4,17 @@ namespace App\Enums;
 
 /**
  * Categorías financieras cerradas con las que el LLM debe clasificar cada artículo.
- * El valor es el slug que viaja en la URL; la etiqueta es lo que ve el lector.
+ * El valor canónico se persiste y viaja en las respuestas del LLM.
  */
 enum NewsCategory: string
 {
-    case Markets = 'mercados';
-    case Economy = 'economia';
-    case Companies = 'empresas';
+    case Markets = 'markets';
+    case Economy = 'economy';
+    case Companies = 'companies';
     case Commodities = 'commodities';
-    case Monetary = 'politica-monetaria';
-    case Regulation = 'regulacion';
-    case Technology = 'tecnologia';
+    case Monetary = 'monetary';
+    case Regulation = 'regulation';
+    case Technology = 'technology';
 
     public function label(): string
     {
@@ -35,5 +35,29 @@ enum NewsCategory: string
     public static function ordered(): array
     {
         return self::cases();
+    }
+
+    public function slug(): string
+    {
+        return match ($this) {
+            self::Markets => 'mercados',
+            self::Economy => 'economia',
+            self::Companies => 'empresas',
+            self::Commodities => 'commodities',
+            self::Monetary => 'politica-monetaria',
+            self::Regulation => 'regulacion',
+            self::Technology => 'tecnologia',
+        };
+    }
+
+    public static function fromSlug(string $slug): ?self
+    {
+        foreach (self::cases() as $category) {
+            if ($category->slug() === $slug) {
+                return $category;
+            }
+        }
+
+        return null;
     }
 }

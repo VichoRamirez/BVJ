@@ -12,7 +12,7 @@
             @continue(($counts[$category->value] ?? 0) === 0)
             <li>
                 <a
-                    href="{{ route('categories.show', $category->value) }}"
+                    href="{{ route('categories.show', $category->slug()) }}"
                     @if ($current === $category) aria-current="page" @endif
                     @class([
                         'touch-target inline-flex items-center gap-2 border px-3 py-1.5 text-sm font-semibold',

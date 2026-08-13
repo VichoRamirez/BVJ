@@ -21,6 +21,7 @@ class HomeController extends Controller
         $briefing = $request->boolean('vacio')
             ? null
             : Briefing::query()
+                ->published()
                 ->with(Briefing::DISPLAY_RELATIONS)
                 ->latest('published_at')
                 ->first();
@@ -28,7 +29,7 @@ class HomeController extends Controller
         return view('home', [
             'briefing' => $briefing,
             'siblings' => $briefing
-                ? Briefing::query()->sameDayAs($briefing)->get()
+                ? Briefing::query()->published()->sameDayAs($briefing)->get()
                 : collect(),
             'markets' => MarketSnapshot::query()->latestPerSymbol()->get(),
             'sources' => Source::query()->orderBy('name')->get(),

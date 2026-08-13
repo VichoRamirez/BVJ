@@ -14,6 +14,7 @@ class BriefingController extends Controller
     {
         return view('briefings.index', [
             'days' => Briefing::query()
+                ->published()
                 ->with('events')
                 ->orderByDesc('published_at')
                 ->get()
@@ -30,7 +31,7 @@ class BriefingController extends Controller
 
         return view('briefings.show', [
             'briefing' => $briefing,
-            'siblings' => Briefing::query()->sameDayAs($briefing)->get(),
+            'siblings' => Briefing::query()->published()->sameDayAs($briefing)->get(),
         ]);
     }
 }

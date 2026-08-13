@@ -2,9 +2,11 @@
 
 namespace App\Providers;
 
+use App\Contracts\MarketDataProvider;
 use App\Contracts\NewsAnalyzer;
 use App\Services\Ai\FakeNewsAnalyzer;
 use App\Services\Ai\OllamaAnalyzer;
+use App\Services\Markets\YahooFinanceProvider;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
@@ -35,6 +37,16 @@ class AppServiceProvider extends ServiceProvider
                     ? 'El driver fake solo está permitido en los entornos local y testing.'
                     : 'No hay un driver de análisis implementado para la configuración actual.'
             );
+        });
+
+        $this->app->bind(MarketDataProvider::class, function (): MarketDataProvider {
+            $provider = config('newsscraper.markets.provider');
+
+            if ($provider === 'yahoo') {
+                return app(YahooFinanceProvider::class);
+            }
+
+            throw new LogicException('No hay un proveedor de datos de mercado implementado para la configuración actual.');
         });
     }
 

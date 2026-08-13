@@ -3,7 +3,9 @@
 Plan de trabajo para el proyecto integrador de la Unidad 3 (Laravel), IIP323W · 2026-2.
 Contexto, decisiones y reglas están en `CLAUDE.md`; el alcance viene de `NewScrapper-propuesta-laravel.pdf`.
 
-**Estado actual:** el dominio está implementado. Existen las doce tablas del modelo de datos con sus modelos, factories y seeders, y las seis rutas del frontend leen de la base de datos (ya no de datos de demostración). Falta el pipeline: scraping, capa de IA, agrupación y scheduler.
+**Estado actual:** el dominio y el cableado del pipeline están implementados. Existen las doce tablas con sus modelos, factories y seeders; las seis rutas del frontend leen de la base de datos; y los cuatro jobs (`ScrapeSourceJob`, `AnalyzeArticleJob`, `ClusterArticlesJob`, `GenerateBriefingJob`), el orquestador `news:pipeline` y el scheduler de 07:00/18:00 ya corren de punta a punta.
+
+**Lo que falta es la extracción de noticias:** los spiders detrás de `App\Contracts\SourceScraper`. Los datos de mercado ya se capturan de Yahoo Finance en vivo (`php artisan news:markets`). Todos los tests corren sin red — `Http::preventStrayRequests()` está activo en la suite de Feature, así que una llamada sin falsear falla el test en vez de salir a internet.
 
 > **Bloqueo de entorno:** el `composer.lock` fue resuelto en PHP 8.4+ (`symfony/*` 8.1 pide `php >=8.4.1`, y `pestphp/pest ^5` pide `php ^8.4` con PHPUnit 13). **El proyecto no corre en PHP 8.3.** Cada integrante necesita PHP 8.4 o 8.5 instalado; con 8.3 el `composer install` falla en la resolución.
 
@@ -98,11 +100,20 @@ Migraciones en orden de dependencia:
 >
 > Si gana B, hay que corregir la tabla de decisiones de `CLAUDE.md §3`.
 
-- [ ] `app/Spiders/DiarioFinancieroSpider.php` y `BloombergSpider.php`: extraer título, URL, autor, fecha, bajada y cuerpo.
-- [ ] `ScrapeSourceJob`: corre un spider, normaliza URLs, persiste con `updateOrCreate` sobre `url_hash`, marca `analysis_status = pending`.
-- [ ] Manejo de fallos por fuente: try/catch por Source, incrementar `failure_count`, log estructurado, **nunca** tumbar el lote completo.
-- [ ] Respetar `robots.txt`, `$delay` entre requests y User-Agent propio.
-- [ ] Comando `php artisan news:scrape {--source=}` para correr manualmente.
+> **El resto del pipeline ya no espera esta decisión.** El contrato
+> `App\Contracts\SourceScraper` aísla la extracción: un spider recibe una `Source`
+> y devuelve `list<ScrapedArticle>`. `ScrapeSourceJob` habla solo con ese
+> contrato, así que elegir A o B cambia las implementaciones, no el pipeline.
+> `SourceScraperResolver` construye el spider desde `sources.spider_class`; una
+> fuente sin spider configurado se trata como fuente caída, que es exactamente el
+> estado en que están hoy las cinco.
+
+- [ ] `app/Spiders/DiarioFinancieroSpider.php` y `BloombergSpider.php`: extraer título, URL, autor, fecha, bajada y cuerpo. **Es lo único que bloquea el pipeline real.**
+- [ ] Respetar `robots.txt`, `$delay` entre requests y User-Agent propio (los valores ya están en `config('newsscraper.scraping')`; falta que un spider los use).
+- [ ] Poblar `sources.spider_class` en `SourceSeeder` cuando existan los spiders.
+- [x] `ScrapeSourceJob`: corre un spider, normaliza URLs, persiste con `updateOrCreate` sobre `url_hash`, marca `analysis_status = pending`.
+- [x] Manejo de fallos por fuente: try/catch por Source, incrementar `failure_count`, log estructurado, **nunca** tumbar el lote completo. El job no relanza nunca: un reintento de la cola volvería a golpear una fuente que ya sabemos caída.
+- [x] Comando `php artisan news:scrape {--source=} {--spider=} {--sync}` para correr manualmente.
 
 ### 3.2 Rutas y vistas (con datos de factories mientras la IA no esté lista)
 
@@ -131,31 +142,49 @@ Migraciones en orden de dependencia:
 ## 4. Semana 3 — IA y funcionalidad principal (responsables: Bruno, Vicente)
 
 ### 4.1 Capa de IA (Bruno)
-- [ ] `App\Contracts\NewsAnalyzer` con `analyze(Article $article): AnalysisResult`.
-- [ ] `App\Services\Ai\OllamaAnalyzer` usando el HTTP client de Laravel con timeout y `retry()`.
-- [ ] `AnalysisResult` como DTO tipado (resumen, categoría, relevancia, empresas, personas, tags, explicación).
-- [ ] Prompt en `resources/prompts/analyze-article.blade.php`: pide JSON estricto, en español, con categorías del enum y prohibición explícita de inventar datos que no estén en el texto.
-- [ ] Validación de la respuesta con `Validator` contra un esquema; en fallo → 1 reintento → `AnalysisStatus::Failed` + log. Guardar siempre `raw_response`.
-- [ ] `AnalyzeArticleJob` con `ThrottlesExceptions` / backoff; encolar entidades y tags con `firstOrCreate` (normalizando nombres para no duplicar "Codelco" vs "CODELCO").
-- [ ] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')` → deja lista la ruta para un `GeminiAnalyzer` si el profesor lo exige.
+- [x] `App\Contracts\NewsAnalyzer` con `analyze(NewsArticleInput $article): AnalysisResult`. Recibe un DTO, no el modelo: el analizador no toca la base de datos.
+- [x] `App\Services\Ai\OllamaAnalyzer` usando el HTTP client de Laravel con timeout y `retry()`.
+- [x] `AnalysisResult` como DTO tipado (resumen, categoría, relevancia, empresas, personas, tags, explicación).
+- [x] Prompt en `resources/views/prompts/analyze-article-v1.blade.php` (no en `resources/prompts/`, para que `view()` lo encuentre): pide JSON estricto, en español, con categorías del enum.
+- [x] Validación de la respuesta con `Validator` contra un esquema; en fallo → 1 reintento → `AnalysisStatus::Failed` + log. `raw_response` viaja en el propio `AnalysisResult` y se guarda siempre.
+- [x] `AnalyzeArticleJob` con `ThrottlesExceptions` / backoff; entidades y tags con `firstOrCreate` normalizado ("Codelco" y "CODELCO" son la misma fila).
+- [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')` → deja lista la ruta para un `GeminiAnalyzer` si el profesor lo exige.
+
+**Criterio de fallo del análisis** (lo que distingue este job del resto): una respuesta mal formada es culpa del contenido y termina en `failed` tras un reintento; un fallo de transporte (Ollama caído, 503, timeout) no es culpa del artículo, se relanza para que la cola reintente con backoff y el artículo sigue `pending`.
 
 ### 4.2 Agrupación y priorización (Bruno + Vicente)
-- [ ] `ClusterArticlesJob`: dentro de una ventana de 24 h, agrupar artículos por (a) similitud de títulos normalizados, (b) entidades compartidas, (c) misma categoría. Umbral configurable.
-- [ ] Crear o reutilizar `Event`; `relevance_score` = relevancia máxima del cluster + bonus por número de fuentes distintas.
-- [ ] `GenerateBriefingJob`: toma los Events del período (AM: desde el briefing anterior), ordena por `relevance_score`, corta en N (config, por defecto 7) y crea `Briefing` + pivote ordenado.
+- [x] `ClusterArticlesJob`: dentro de la ventana configurable, agrupa por (a) similitud de títulos normalizados, (b) entidades compartidas, (c) misma categoría.
+- [x] Crear o reutilizar `Event`; `relevance_score` = relevancia máxima del cluster + bonus por fuentes distintas.
+- [x] `GenerateBriefingJob`: toma los Events del período (desde el briefing anterior), ordena por `relevance_score`, corta en N (config, por defecto 7) y crea `Briefing` + pivote ordenado. Una edición vacía no se publica.
+
+**La identidad de un `Event` son sus artículos, no su título.** Si algún miembro del grupo ya pertenece a un acontecimiento, se reutiliza ese y el slug queda congelado. Sin esto, un artículo que llega tarde y cambia el título representativo abriría un acontecimiento duplicado, y dos hechos distintos con el mismo titular se fusionarían.
 
 ### 4.3 Automatización
-- [ ] Scheduler en `routes/console.php`: pipeline a las **07:00** (edición `morning`) y **18:00** (`evening`), zona `America/Santiago`, con `withoutOverlapping()` y `onOneServer()`.
-- [ ] Comando orquestador `php artisan news:pipeline {--edition=}` que encadena scrape → analyze → cluster → briefing (usable a mano para la demo).
-- [ ] `FetchMarketSnapshotsJob` para Yahoo Finance + gráficos en `/mercados`.
+- [x] Scheduler en `routes/console.php`: pipeline a las **07:00** (`morning`) y **18:00** (`evening`), zona `America/Santiago`, con `withoutOverlapping()` y `onOneServer()`. Los horarios salen de `BriefingEdition::scheduledHour()`, no escritos a mano.
+- [x] Comando orquestador `php artisan news:pipeline {--edition=} {--spider=} {--skip-scrape}` que encadena scrape → analyze → cluster → briefing. Las cuatro etapas corren **en orden y en el proceso del comando**: agrupar antes de que terminen los análisis produciría acontecimientos incompletos.
+- [x] `FetchMarketSnapshotsJob` para Yahoo Finance, detrás de `App\Contracts\MarketDataProvider`. Comando manual: `php artisan news:markets`. **Sin API key:** el endpoint `/v8/finance/chart` es abierto; lo único que exige es un User-Agent declarado, y usa el mismo identificable del scraping.
 
-**Hecho cuando:** `php artisan news:pipeline --edition=morning` genera un briefing real end-to-end.
+> **`^IPSA` viene congelado desde Yahoo.** Su última hora de mercado es del
+> 2026-07-17, así que llega con un solo cierre y variación 0,00%. Los otros cinco
+> instrumentos responden al día. Alternativa verificada: `ECH` (iShares MSCI Chile
+> ETF), que cotiza en NY y sí está al día — pero es un proxy, no el índice. Es una
+> decisión de producto pendiente, no un bug del código.
+
+> **No se usa `scheb/yahoo-finance-api`.** Sigue declarado en `composer.json` pero
+> ninguna clase lo importa. Se prefirió el HTTP client de Laravel por tres razones:
+> el endpoint de gráficos devuelve precio, cierre anterior e histórico en **una**
+> llamada (el paquete necesita dos por símbolo), no exige la danza de cookie +
+> crumb que el paquete implementa para `/v7/finance/quote`, y `Http::fake()`
+> intercepta las llamadas —el paquete usa Guzzle directo, así que los tests
+> tendrían que mockear su cliente. Queda por decidir si se saca la dependencia.
+
+**Hecho cuando:** `php artisan news:pipeline --edition=morning` genera un briefing real end-to-end. ✔ probado de punta a punta en `tests/Feature/NewsPipelineCommandTest.php` con spider y analizador de mentira; falta repetirlo con fuentes reales.
 
 ---
 
 ## 5. Semana 4 — Cierre, pruebas y presentación (todo el equipo)
 
-- [ ] Cobertura de tests: parseo del LLM (JSON válido, inválido, campos faltantes) y clustering. *(hechos: deduplicación por `url_hash`, orden del briefing y smoke de las 6 rutas)*
+- [x] Cobertura de tests: parseo del LLM (JSON válido, inválido, campos faltantes), clustering, deduplicación por `url_hash`, orden del briefing, smoke de las 6 rutas y el pipeline completo. Ninguno toca la red.
 - [ ] Estados vacíos y de error en la UI (sin briefing aún, fuente caída, análisis fallido). *(los tres primeros hechos)*
 - [x] Seeder de demo (`DemoSeeder`) con un par de briefings realistas, por si el scraping falla en vivo durante la presentación. **Plan B obligatorio.** Adelantado a la Semana 1: 13 acontecimientos, 5 ediciones y 6 instrumentos, con fechas relativas a hoy.
 - [ ] `vendor/bin/pint` sobre todo el proyecto.

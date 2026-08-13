@@ -11,6 +11,11 @@ readonly class AnalysisResult
      * @param  list<string>  $companies
      * @param  list<string>  $people
      * @param  list<string>  $tags
+     * @param  array<string, mixed>  $rawResponse  Lo que devolvió el modelo, ya
+     *                                             decodificado pero sin convertir a enums ni
+     *                                             recortar. Se persiste tal cual en
+     *                                             `analyses.raw_response` para poder auditar
+     *                                             alucinaciones (CLAUDE.md §4).
      */
     public function __construct(
         public string $summary,
@@ -23,5 +28,6 @@ readonly class AnalysisResult
         public string $provider,
         public string $model,
         public string $schemaVersion,
+        public array $rawResponse = [],
     ) {}
 }

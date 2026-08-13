@@ -28,7 +28,10 @@ it('renderiza las rutas principales', function (string $url) {
 it('muestra el último briefing en la portada', function () {
     seedDemo();
 
-    $briefing = Briefing::query()->with('events')->latest('published_at')->first();
+    // Con `published()`, igual que HomeController: sin el scope, a primera hora
+    // del día este test toma la edición de la tarde —que el seeder crea con hora
+    // 18:00 y todavía no se publica— y falla según la hora en que se corra.
+    $briefing = Briefing::query()->with('events')->published()->latest('published_at')->first();
 
     $this->get('/')
         ->assertSuccessful()

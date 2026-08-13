@@ -50,11 +50,18 @@
                                 <x-market-change :percent="$market->change_percent" class="justify-end" />
                             </td>
                             <td class="py-4 pr-4 align-middle">
-                                <x-sparkline
-                                    :points="$market->history"
-                                    :positive="$market->change_percent >= 0"
-                                    :label="'Tendencia de '.$market->name.' en las últimas diez sesiones: '.($market->change_percent >= 0 ? 'al alza' : 'a la baja')"
-                                />
+                                @if (count($market->history) > 1)
+                                    <x-sparkline
+                                        :points="$market->history"
+                                        :positive="$market->change_percent >= 0"
+                                        :label="'Tendencia de '.$market->name.' en las últimas diez sesiones: '.($market->change_percent >= 0 ? 'al alza' : 'a la baja')"
+                                    />
+                                @else
+                                    {{-- Un solo cierre no dibuja una línea. Pasa cuando el proveedor
+                                         deja de actualizar un instrumento: mejor decirlo que mostrar
+                                         una celda vacía que parece un error de la página. --}}
+                                    <span class="text-xs text-muted">Sin serie disponible</span>
+                                @endif
                             </td>
                         </tr>
                     @endforeach

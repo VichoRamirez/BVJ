@@ -92,6 +92,7 @@ class AnalysisResponseParser
             provider: $this->provider,
             model: $this->model,
             schemaVersion: $this->schemaVersion,
+            rawResponse: $payload,
         );
     }
 

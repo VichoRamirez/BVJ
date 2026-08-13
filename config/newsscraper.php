@@ -96,7 +96,26 @@ return [
     */
 
     'markets' => [
+        'provider' => env('NEWS_MARKETS_PROVIDER', 'yahoo'),
+
         'history_sessions' => 10,
+
+        /*
+        | Yahoo Finance no pide API key: /v8/finance/chart es un endpoint
+        | abierto. Lo único que exige es un User-Agent declarado (reutiliza el
+        | de `scraping`), y por eso acá no hay ninguna credencial que proteger.
+        |
+        | El rango es más ancho que `history_sessions` a propósito: incluye
+        | feriados y sesiones sin datos, que se descartan al armar la serie.
+        */
+        'yahoo' => [
+            'base_url' => 'https://query1.finance.yahoo.com',
+            'range' => '1mo',
+            'interval' => '1d',
+            'timeout' => (int) env('NEWS_MARKETS_TIMEOUT', 15),
+            'retry_attempts' => (int) env('NEWS_MARKETS_RETRY_ATTEMPTS', 2),
+            'retry_backoff' => (int) env('NEWS_MARKETS_RETRY_BACKOFF', 500),
+        ],
 
         'instruments' => [
             ['symbol' => '^IPSA', 'name' => 'IPSA', 'detail' => 'Bolsa de Santiago', 'unit' => 'pts'],

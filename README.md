@@ -4,9 +4,10 @@ Agente de coyuntura (scraper + análisis de noticias) construido en Laravel. El 
 
 Inspirado en [Agentes_de_Coyuntura](https://github.com/DataMarketAnalysisClub/Agentes_de_Coyuntura) de DataMarketAnalysisClub.
 
-> Proyecto en curso. El frontend (rutas, vistas Blade y sistema de diseño) y el modelo de datos
-> completo están implementados: las seis rutas leen de la base de datos. El scraping, el análisis
-> por LLM y el pipeline de briefings todavía no están implementados — ver `PLAN.md`.
+> Proyecto en curso. El frontend, el modelo de datos, el pipeline completo (recolección →
+> análisis → agrupación → briefing) y la captura de datos de mercado están implementados y
+> probados. Lo único que falta es la extracción de noticias: los spiders de cada fuente —
+> ver `PLAN.md`.
 
 ## Stack
 
@@ -63,6 +64,20 @@ NEWS_OLLAMA_MAX_RESPONSE_BYTES=1048576
 
 La URL debe usar HTTP, un literal IP loopback (`127.0.0.1` o `[::1]`) y un puerto explícito.
 
+### Datos de mercado
+
+**No hay que configurar ninguna API key.** El endpoint de gráficos de Yahoo Finance
+(`/v8/finance/chart`) es público. Lo único que exige es un User-Agent declarado: con el de
+`curl` por defecto responde 429, con `NEWS_USER_AGENT` responde 200. Los instrumentos que se
+siguen están en `config/newsscraper.php`, no en `.env`.
+
+```bash
+php artisan news:markets
+```
+
+> `^IPSA` viene congelado desde Yahoo (última cotización del 2026-07-17), así que aparece con
+> variación 0,00% y sin serie. Los otros cinco instrumentos responden al día. Ver `PLAN.md §4.3`.
+
 ## Desarrollo
 
 Levanta servidor, cola, logs y Vite en paralelo:
@@ -93,6 +108,42 @@ tail -f storage/logs/laravel.log
 > **Nota sobre Git Bash:** si usas la terminal de Git Bash, `composer` no resuelve porque
 > bash no completa la extensión `.bat` automáticamente. Escribe `composer.bat run dev:win`,
 > o usa PowerShell, donde `composer` funciona tal cual.
+
+## El pipeline
+
+Cuatro etapas encadenadas, cada una dentro de un Job. Toda llamada externa vive ahí dentro;
+los controladores solo leen tablas ya escritas.
+
+```
+news:pipeline
+  ├─ ScrapeSourceJob          un spider por fuente → Article (dedup por url_hash)
+  ├─ AnalyzeArticleJob        LLM → JSON validado → Analysis + Entities + Tags
+  ├─ ClusterArticlesJob       agrupa Articles de distintos medios → Event
+  ├─ FetchMarketSnapshotsJob  Yahoo Finance → MarketSnapshot
+  └─ GenerateBriefingJob      top N Events del período → Briefing
+```
+
+El scheduler lo corre a las **07:00** y a las **18:00** de Chile. Para que eso ocurra, en el
+servidor tiene que estar corriendo `php artisan schedule:work` (o el cron equivalente).
+
+A mano:
+
+```bash
+php artisan news:pipeline --edition=morning   # corrida completa
+php artisan news:pipeline --skip-scrape       # analizar y publicar lo que ya está en la base
+php artisan news:scrape --source=diario-financiero --sync
+php artisan news:markets                      # solo las cotizaciones
+php artisan schedule:list                     # ver los horarios registrados
+```
+
+Las cuatro etapas del pipeline corren **en orden dentro del proceso del comando**, no repartidas
+en la cola: agrupar antes de que terminen los análisis produciría acontecimientos incompletos.
+`news:scrape`, en cambio, encola por defecto (usa `--sync` si no tienes un worker levantado).
+
+> **Todavía no hay spiders.** `sources.spider_class` está vacío en las cinco fuentes, así que
+> hoy `news:scrape` registra "sin spider configurado" como fallo de cada fuente y no recolecta
+> nada. Es el estado esperado: falta escribir las implementaciones de
+> `App\Contracts\SourceScraper`. Mientras tanto, el contenido de las vistas lo pone `DemoSeeder`.
 
 ## Rutas
 

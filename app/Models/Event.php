@@ -89,6 +89,24 @@ class Event extends Model
     }
 
     /**
+     * Solo lo que ya salió publicado.
+     *
+     * Un acontecimiento existe en la base desde que el clustering lo crea, pero
+     * eso no lo hace público: recién lo es cuando una edición ya publicada lo
+     * incluye. Sin este filtro, `/categorias` y `/eventos/{slug}` filtrarían el
+     * contenido de la edición de la tarde durante toda la mañana.
+     *
+     * @param  Builder<static>  $query
+     */
+    public function scopePublished(Builder $query): void
+    {
+        $query->whereHas(
+            'briefings',
+            fn (Builder $briefings) => $briefings->where('briefings.published_at', '<=', now())
+        );
+    }
+
+    /**
      * Del más relevante al menos relevante.
      *
      * El orden va sobre `relevance_score` (entero) y no sobre `relevance`, que
@@ -150,6 +168,7 @@ class Event extends Model
     public static function categoryCounts(): Collection
     {
         return static::query()
+            ->published()
             ->toBase()
             ->selectRaw('category, count(*) as aggregate')
             ->groupBy('category')

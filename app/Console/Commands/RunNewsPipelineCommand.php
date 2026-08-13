@@ -146,18 +146,29 @@ class RunNewsPipelineCommand extends Command
         );
     }
 
+    /**
+     * La fecha editorial: el día en Chile al que pertenece esta corrida.
+     *
+     * GenerateBriefingJob la exige explícita en vez de deducirla de `now()`, y
+     * está bien que así sea: permite reconstruir a mano la edición de ayer si el
+     * scheduler no corrió, sin depender de cuándo se ejecute el comando.
+     */
+    private function editorialDate(): string
+    {
+        return CarbonImmutable::now(config('newsscraper.briefing.timezone'))->toDateString();
+    }
+
     private function publish(BriefingEdition $edition): int
     {
-        dispatch_sync(new GenerateBriefingJob($edition));
+        $editorialDate = $this->editorialDate();
+        $existedBefore = $this->editionOf($edition, $editorialDate) !== null;
 
-        // Se busca la edición por su hora programada exacta, no "la última de
-        // hoy": si el job no publicó nada, una edición preexistente (la del
-        // seeder de demo, por ejemplo) haría que el comando reportara un éxito
-        // que no ocurrió.
-        $briefing = Briefing::query()
-            ->where('edition', $edition)
-            ->where('published_at', GenerateBriefingJob::scheduledAt($edition)->utc())
-            ->first();
+        dispatch_sync(new GenerateBriefingJob($edition, $editorialDate));
+
+        // Se busca la edición exacta (fecha editorial + edición), no "la última
+        // de hoy": si el job no publicó nada, cualquier otra fila del día haría
+        // que el comando reportara un éxito que no ocurrió.
+        $briefing = $this->editionOf($edition, $editorialDate);
 
         if ($briefing === null) {
             $this->components->warn('No había acontecimientos suficientes: no se publicó edición.');
@@ -165,11 +176,22 @@ class RunNewsPipelineCommand extends Command
             return self::FAILURE;
         }
 
+        // El job es idempotente por omisión: si la edición ya existía, no la
+        // toca. Se distingue de una publicación nueva para que una corrida
+        // repetida no parezca que volvió a generar el briefing.
         $this->components->twoColumnDetail(
-            'Edición publicada',
+            $existedBefore ? 'Edición ya publicada' : 'Edición publicada',
             $briefing->published_at->timezone(config('newsscraper.briefing.timezone'))->format('d-m-Y H:i')
         );
 
         return self::SUCCESS;
+    }
+
+    private function editionOf(BriefingEdition $edition, string $editorialDate): ?Briefing
+    {
+        return Briefing::query()
+            ->where('edition', $edition)
+            ->whereDate('published_on', $editorialDate)
+            ->first();
     }
 }

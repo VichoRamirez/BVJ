@@ -67,6 +67,24 @@ class AnalyzeArticleJob implements ShouldQueue
             return;
         }
 
+        // Un artículo sin texto no es analizable por más reintentos que se le
+        // den: el LLM solo tendría el titular y se le está prohibiendo
+        // explícitamente inventar (CLAUDE.md §4). Se descarta antes de tomar el
+        // lease para no gastar una llamada al modelo.
+        if (trim((string) ($article->content ?? $article->excerpt ?? '')) === '') {
+            Article::query()
+                ->whereKey($article->id)
+                ->where('analysis_status', '!=', AnalysisStatus::Completed->value)
+                ->update([
+                    'analysis_status' => AnalysisStatus::Failed,
+                    'analysis_error' => 'El artículo no tiene texto que analizar.',
+                    'analysis_started_at' => null,
+                    'analysis_run_id' => null,
+                ]);
+
+            return;
+        }
+
         $staleBefore = now()->subSeconds((int) config('newsscraper.ai.processing_stale_after', 300));
         $canStart = $article->analysis_status !== AnalysisStatus::Processing
             || $article->analysis_started_at === null
@@ -104,7 +122,10 @@ class AnalyzeArticleJob implements ShouldQueue
             title: $article->title,
             content: (string) $article->content,
             excerpt: $article->excerpt,
-            url: $article->url,
+            // NewsArticleInput solo acepta HTTPS y lanza si no lo es. Una fuente
+            // servida por HTTP no puede dejar el artículo sin analizar: va sin
+            // URL de contexto, que es opcional en el prompt.
+            url: str_starts_with($article->url, 'https://') ? $article->url : null,
         );
         $result = $analyzer->analyze($input);
 

@@ -32,6 +32,29 @@ composer install
 npm install
 ```
 
+> ### ⚠️ Después de cada `git pull`, corre `composer install`
+>
+> El `composer.lock` cambia cuando alguien agrega una librería. Si no lo corres,
+> vas a ver errores de "class not found" en clases que en el repo sí existen.
+> Lo mismo con `npm install` cuando cambie `package-lock.json`.
+
+### Dependencias de terceros
+
+Versiones exactas del `composer.lock`. Ninguna se instala a mano: las trae `composer install`.
+
+| Paquete | Versión | Para qué | Agregada |
+|---|---|---|---|
+| `laravel/framework` | v13.23 | Framework | Inicio |
+| `symfony/dom-crawler` | v8.1.1 | Leer los listados HTML de las fuentes sin RSS (`HtmlListingSpider`) | Semana 3 |
+| `symfony/css-selector` | v8.1.0 | Selectores CSS para DomCrawler | Semana 3 |
+| `scheb/yahoo-finance-api` | v5.2.0 | **Sin uso.** Ninguna clase la importa: los datos de mercado salen del HTTP client de Laravel. Pendiente decidir si se saca | Semana 1 |
+
+`symfony/dom-crawler` y `symfony/css-selector` exigen **PHP >= 8.4.1**, igual que el resto del
+lock. No agregan dependencias transitivas nuevas: Symfony 8.1 ya estaba en el proyecto.
+
+El RSS se parsea con `SimpleXMLElement`, que es parte de PHP (`ext-simplexml`) y no requiere
+instalar nada.
+
 Copia el archivo de entorno y genera la clave de la aplicación:
 
 ```bash
@@ -140,10 +163,51 @@ Las cuatro etapas del pipeline corren **en orden dentro del proceso del comando*
 en la cola: agrupar antes de que terminen los análisis produciría acontecimientos incompletos.
 `news:scrape`, en cambio, encola por defecto (usa `--sync` si no tienes un worker levantado).
 
-> **Todavía no hay spiders.** `sources.spider_class` está vacío en las cinco fuentes, así que
-> hoy `news:scrape` registra "sin spider configurado" como fallo de cada fuente y no recolecta
-> nada. Es el estado esperado: falta escribir las implementaciones de
-> `App\Contracts\SourceScraper`. Mientras tanto, el contenido de las vistas lo pone `DemoSeeder`.
+### Arañas (spiders)
+
+Cada fuente tiene un spider que implementa `App\Contracts\SourceScraper`. Ninguno hace requests
+por su cuenta: todos pasan por `SafeHttpFetcher`, la única puerta de salida a internet del
+scraping, que centraliza allowlist de hosts, protección SSRF, redirecciones revalidadas salto a
+salto, `robots.txt`, retardo entre requests, timeout, reintentos, tamaño máximo y codificación.
+
+**Solo se activan las fuentes que tienen araña.** Una fuente activa sin `spider_class` no
+recolecta nada y solo acumula fallos, así que las demás quedan inactivas con el motivo escrito
+en `last_failure_reason`.
+
+| Fuente | Araña | Estado |
+|---|---|---|
+| Diario Financiero · Mercados | `DiarioFinancieroSpider` (HTML) | activa |
+| Pulso · La Tercera | `PulsoSpider` (HTML) | activa |
+| BBC News Mundo · Economía | `BbcMundoEconomiaSpider` (RSS) | activa |
+| Bloomberg Línea, El Mercurio Inversiones | — | inactivas, falta araña |
+| Reuters | — | inactiva, responde 403 |
+
+Las tres activas declaran en su `robots.txt` que permiten el acceso a las rutas que se leen.
+
+> **Ninguna fuente chilena publica RSS.** Se probaron los feeds de Diario Financiero, Pulso,
+> Emol, BioBioChile y El Mostrador: todos responden 404, redirigen a la portada o devuelven
+> HTML. Por eso las dos chilenas se leen del listado HTML, y BBC Mundo —la única con RSS
+> servible— quedó como respaldo. Ojo con esta última: su feed de `/economia` sirve contenido
+> general de BBC Mundo, no solo económico.
+
+**Se filtra lo que no es periodismo.** Los listados mezclan notas con publirreportajes,
+contenido *branded* y videos. Cada araña declara en `articlePathPattern()` qué rutas son notas
+de verdad: publicar publicidad pagada dentro del briefing, resumida por una IA y presentada
+igual que una noticia, sería engañar al lector.
+
+Dos capas de allowlist, ambas en `config/newsscraper.php`: `scraping.allowed_hosts` (a qué
+dominios se sale) y `scraping.spiders` (qué clases puede instanciar el resolver). `spider_class`
+es un dato de la base y `--spider=` viene de la consola: ninguno de los dos puede terminar
+ejecutando una clase arbitraria.
+
+**Qué se guarda de cada nota.** Los spiders RSS no abren el artículo: se quedan con el titular,
+el enlace, la fecha y la bajada que el propio medio publica para ser sindicado, recortados a
+`NEWS_MAX_CONTENT_CHARS` y `NEWS_MAX_EXCERPT_CHARS`. Nunca se almacena ni se republica el cuerpo
+completo con copyright; lo que se muestra es el resumen generado más el enlace al original.
+
+Para escribir una araña nueva: extender `App\Spiders\RssSpider` (o implementar el contrato para
+HTML), agregar la clase a `scraping.spiders`, el host a `scraping.allowed_hosts` y asignar
+`spider_class` en `SourceSeeder`.
 
 ## Rutas
 

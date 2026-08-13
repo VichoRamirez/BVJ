@@ -1,6 +1,9 @@
 <?php
 
 declare(strict_types=1);
+use App\Spiders\BbcMundoEconomiaSpider;
+use App\Spiders\DiarioFinancieroSpider;
+use App\Spiders\PulsoSpider;
 
 /*
 |--------------------------------------------------------------------------
@@ -161,6 +164,50 @@ return [
         'request_timeout' => (int) env('NEWS_SCRAPE_TIMEOUT', 20),
         'respect_robots_txt' => true,
         'max_articles_per_source' => (int) env('NEWS_MAX_ARTICLES', 25),
+        'retry_attempts' => (int) env('NEWS_SCRAPE_RETRY_ATTEMPTS', 2),
+        'retry_backoff' => (int) env('NEWS_SCRAPE_RETRY_BACKOFF', 500),
+        'max_redirects' => (int) env('NEWS_SCRAPE_MAX_REDIRECTS', 3),
+        'max_response_bytes' => (int) env('NEWS_SCRAPE_MAX_BYTES', 5_242_880),
+        'robots_cache_ttl' => (int) env('NEWS_SCRAPE_ROBOTS_TTL', 3600),
+
+        /*
+        | Resolver el host y rechazarlo si apunta a una red privada (anti-SSRF).
+        | Solo se apaga donde no hay DNS, como en los tests; la lógica de rangos
+        | se prueba aparte en SafeHttpFetcher::isPublicAddress().
+        */
+        'verify_public_address' => (bool) env('NEWS_SCRAPE_VERIFY_PUBLIC_ADDRESS', true),
+
+        /*
+        | Lo que se guarda de cada artículo. Se recorta a propósito: hace falta
+        | lo justo para que el LLM analice, y republicar el cuerpo completo de
+        | un medio con copyright no está permitido (CLAUDE.md §4). Los spiders
+        | RSS ni siquiera abren la nota: se quedan con la bajada del feed.
+        */
+        'max_content_chars' => (int) env('NEWS_MAX_CONTENT_CHARS', 4000),
+        'max_excerpt_chars' => (int) env('NEWS_MAX_EXCERPT_CHARS', 600),
+
+        /*
+        | Allowlist de hosts. SafeHttpFetcher no sale a ningún dominio que no
+        | esté acá, y revalida cada redirección contra la misma lista: una
+        | fuente comprometida no puede empujar al bot hacia otro sitio ni hacia
+        | la red interna.
+        */
+        'allowed_hosts' => [
+            'feeds.bbci.co.uk',
+            'www.df.cl',
+            'www.latercera.com',
+        ],
+
+        /*
+        | Allowlist de spiders. `sources.spider_class` es un dato de la base y
+        | no puede terminar instanciando cualquier clase del proyecto: el
+        | resolver solo acepta las de esta lista.
+        */
+        'spiders' => [
+            BbcMundoEconomiaSpider::class,
+            DiarioFinancieroSpider::class,
+            PulsoSpider::class,
+        ],
     ],
 
 ];

@@ -16,6 +16,10 @@ use Tests\Fixtures\StubSourceScraper;
 beforeEach(function (): void {
     StubSourceScraper::reset();
     Bus::fake([AnalyzeArticleJob::class]);
+
+    // `sources.spider_class` es un dato de la base: el resolver solo instancia
+    // clases de la allowlist, así que el doble tiene que declararse acá.
+    config(['newsscraper.scraping.spiders' => [StubSourceScraper::class]]);
 });
 
 function scrapedArticle(string $url, string $title = 'Cobre supera los cinco dólares la libra'): ScrapedArticle

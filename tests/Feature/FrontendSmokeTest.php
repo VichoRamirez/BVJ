@@ -91,7 +91,9 @@ it('devuelve 404 para una edición inexistente', function () {
 it('muestra el detalle de un acontecimiento con sus fuentes y el enlace original', function () {
     seedDemo();
 
-    $event = Event::query()->with('articles.source')->mostRelevant()->first();
+    // Con `published()`, igual que EventController: un acontecimiento que solo
+    // está en la edición de la tarde todavía no es público y responde 404.
+    $event = Event::query()->with('articles.source')->published()->mostRelevant()->first();
     $article = $event->articles->first();
 
     $this->get("/eventos/{$event->slug}")
@@ -113,7 +115,7 @@ it('filtra acontecimientos por categoría', function () {
 
     $response = $this->get("/categorias/{$category->slug()}")->assertSuccessful();
 
-    $events = Event::query()->where('category', $category)->get();
+    $events = Event::query()->published()->where('category', $category)->get();
 
     expect($events)->not->toBeEmpty();
 

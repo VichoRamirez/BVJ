@@ -370,3 +370,59 @@ test('backfills completed execution metadata when the additive migration is appl
     expect($article->fresh()->analysis_attempts)->toBe(1)
         ->and($article->fresh()->analysis_completed_at->toDateTimeString())->toBe($analyzedAt->toDateTimeString());
 });
+
+/*
+ * Los dos casos de abajo se perdieron en un merge y volvieron a entrar: son
+ * regresiones que ningún test cubría, así que nada avisó cuando desaparecieron.
+ */
+
+test('does not call the model for an article without text', function () {
+    $called = false;
+    app()->instance(NewsAnalyzer::class, new class($called) implements NewsAnalyzer
+    {
+        public function __construct(public bool &$called) {}
+
+        public function analyze(NewsArticleInput $article): AnalysisResult
+        {
+            $this->called = true;
+
+            return analysisResult();
+        }
+    });
+
+    $article = Article::factory()->pending()->create(['content' => null, 'excerpt' => null]);
+
+    (new AnalyzeArticleJob($article->id))->handle(app(NewsAnalyzer::class), app(EntityNormalizer::class));
+
+    $article->refresh();
+
+    expect($called)->toBeFalse()
+        ->and($article->analysis_status)->toBe(AnalysisStatus::Failed)
+        ->and($article->analysis_error)->toContain('no tiene texto')
+        ->and($article->analysis)->toBeNull();
+});
+
+test('analyses an article served over http, without the url as context', function () {
+    $receivedUrl = 'sin definir';
+    app()->instance(NewsAnalyzer::class, new class($receivedUrl) implements NewsAnalyzer
+    {
+        public function __construct(public ?string &$receivedUrl) {}
+
+        public function analyze(NewsArticleInput $article): AnalysisResult
+        {
+            $this->receivedUrl = $article->url;
+
+            return analysisResult();
+        }
+    });
+
+    // NewsArticleInput solo acepta HTTPS: si la URL viajara tal cual, el DTO
+    // lanzaría y el artículo terminaría marcado como fallido sin haberlo
+    // intentado nunca.
+    $article = Article::factory()->pending()->create(['url' => 'http://df.cl/nota-en-http']);
+
+    (new AnalyzeArticleJob($article->id))->handle(app(NewsAnalyzer::class), app(EntityNormalizer::class));
+
+    expect($receivedUrl)->toBeNull()
+        ->and($article->fresh()->analysis_status)->toBe(AnalysisStatus::Completed);
+});

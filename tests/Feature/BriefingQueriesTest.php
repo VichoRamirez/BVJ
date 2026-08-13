@@ -56,14 +56,34 @@ it('trae las otras ediciones del mismo día ordenadas por hora', function () {
 });
 
 it('cuenta acontecimientos por categoría con claves de texto', function () {
-    Event::factory()->count(2)->ofCategory(NewsCategory::Monetary)->create();
-    Event::factory()->ofCategory(NewsCategory::Markets)->create();
+    // El contador solo cuenta lo ya publicado, así que los acontecimientos van
+    // dentro de una edición cuya hora de publicación ya pasó.
+    $briefing = Briefing::factory()->create([
+        'edition' => BriefingEdition::Morning,
+        'published_on' => now(),
+        'published_at' => now()->subHour(),
+    ]);
+
+    $events = collect([
+        ...Event::factory()->count(2)->ofCategory(NewsCategory::Monetary)->create(),
+        Event::factory()->ofCategory(NewsCategory::Markets)->create(),
+    ]);
+
+    $briefing->events()->attach(
+        $events->mapWithKeys(fn (Event $event, int $index): array => [$event->id => ['position' => $index + 1]])->all()
+    );
 
     $counts = Event::categoryCounts();
 
     expect($counts[NewsCategory::Monetary->value])->toBe(2)
         ->and($counts[NewsCategory::Markets->value])->toBe(1)
         ->and($counts->get(NewsCategory::Technology->value))->toBeNull();
+});
+
+it('no cuenta acontecimientos que ninguna edición publicada incluye', function () {
+    Event::factory()->count(2)->ofCategory(NewsCategory::Monetary)->create();
+
+    expect(Event::categoryCounts()->get(NewsCategory::Monetary->value))->toBeNull();
 });
 
 it('ordena del más relevante al menos relevante', function () {

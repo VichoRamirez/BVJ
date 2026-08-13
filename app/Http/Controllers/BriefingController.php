@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Briefing;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\Response;
 
 class BriefingController extends Controller
 {
@@ -23,10 +24,16 @@ class BriefingController extends Controller
     }
 
     /**
-     * Una edición concreta. El 404 lo da el route model binding.
+     * Una edición concreta.
+     *
+     * Una edición cuya hora de publicación todavía no llega no existe para el
+     * público: se responde 404 y no 403, porque decir "existe pero no puedes
+     * verla" ya filtra que hay una edición preparada.
      */
     public function show(Briefing $briefing): View
     {
+        abort_if($briefing->published_at->isFuture(), Response::HTTP_NOT_FOUND);
+
         $briefing->load(Briefing::DISPLAY_RELATIONS);
 
         return view('briefings.show', [

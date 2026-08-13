@@ -11,12 +11,13 @@ readonly class AnalysisResult
      * @param  list<string>  $companies
      * @param  list<string>  $people
      * @param  list<string>  $tags
-     * @param  array<string, mixed>  $rawResponse
-     * @param  array<string, mixed>  $rawResponse  Lo que devolvió el modelo, ya
-     *                                             decodificado pero sin convertir a enums ni
-     *                                             recortar. Se persiste tal cual en
+     * @param  array<string, mixed>  $rawResponse  Lo que devolvió el modelo: el texto tal
+     *                                             cual en `content` y su decodificación en
+     *                                             `payload`. Se persiste en
      *                                             `analyses.raw_response` para poder auditar
-     *                                             alucinaciones (CLAUDE.md §4).
+     *                                             alucinaciones (CLAUDE.md §4). No lleva
+     *                                             default a propósito: que sea obligatorio es
+     *                                             lo que impide perder la respuesta cruda.
      */
     public function __construct(
         public string $summary,
@@ -30,6 +31,5 @@ readonly class AnalysisResult
         public string $model,
         public string $schemaVersion,
         public array $rawResponse,
-        public array $rawResponse = [],
     ) {}
 }

@@ -108,9 +108,25 @@ Migraciones en orden de dependencia:
 > fuente sin spider configurado se trata como fuente caída, que es exactamente el
 > estado en que están hoy las cinco.
 
-- [ ] `app/Spiders/DiarioFinancieroSpider.php` y `BloombergSpider.php`: extraer título, URL, autor, fecha, bajada y cuerpo. **Es lo único que bloquea el pipeline real.**
-- [ ] Respetar `robots.txt`, `$delay` entre requests y User-Agent propio (los valores ya están en `config('newsscraper.scraping')`; falta que un spider los use).
-- [ ] Poblar `sources.spider_class` en `SourceSeeder` cuando existan los spiders.
+**Decisión tomada y ejecutada: opción B.** Nada de Roach. `SafeHttpFetcher` sobre el HTTP client de Laravel; RSS con `SimpleXMLElement` (parte de PHP) y HTML con `symfony/dom-crawler` v8.1.1 + `symfony/css-selector` v8.1.0, **ya instaladas y en el `composer.lock`**. No degradan nada: Symfony 8.1 ya estaba en el proyecto y ambas piden `php >=8.4.1`, igual que el resto del lock.
+
+> **Al hacer `git pull`, corre `composer install`.** El lock cambió; sin eso, `HtmlListingSpider` falla con "class not found".
+
+- [x] Respetar `robots.txt`, retardo entre requests y User-Agent propio, más allowlist de hosts, anti-SSRF, redirecciones revalidadas en cada salto, tamaño máximo y normalización de codificación. Todo centralizado en `SafeHttpFetcher`: ningún spider hace requests por su cuenta.
+- [x] `DiarioFinancieroSpider` y `PulsoSpider` sobre `App\Spiders\HtmlListingSpider`, más `BbcMundoEconomiaSpider` sobre `RssSpider`. Verificadas en vivo: 6, 12 y 25 artículos reales recolectados.
+- [x] Poblar `sources.spider_class` en `SourceSeeder`. Las fuentes sin araña quedan **inactivas** con el motivo escrito: una fuente activa sin spider solo acumula fallos.
+- [x] Filtrar lo que no es periodismo. Los listados mezclan notas con publirreportajes, contenido *branded* y videos; cada araña declara en `articlePathPattern()` qué rutas son notas. Publicar publicidad pagada dentro del briefing, resumida por IA, sería engañar al lector.
+- [ ] Arañas para Bloomberg Línea y El Mercurio Inversiones.
+
+> **Ninguna fuente chilena publica RSS.** Se probaron Diario Financiero, Pulso, Emol,
+> BioBioChile y El Mostrador: responden 404, redirigen a la portada o devuelven HTML. Por eso
+> las dos chilenas se leen del listado de la portada de sección —un solo request, sin abrir la
+> nota, sin tocar paywalls— y BBC Mundo, la única con RSS servible, quedó como respaldo. Ojo con
+> esa última: su feed `/economia` sirve contenido general, no solo económico.
+
+> **Volumen bajo en Diario Financiero.** Solo 6 de sus ~120 tarjetas quedan tras filtrar por
+> sección y exigir bajada. Alcanza para el MVP, pero si hace falta más habrá que leer también
+> `/empresas` y `/economia-y-politica` como listados aparte.
 - [x] `ScrapeSourceJob`: corre un spider, normaliza URLs, persiste con `updateOrCreate` sobre `url_hash`, marca `analysis_status = pending`.
 - [x] Manejo de fallos por fuente: try/catch por Source, incrementar `failure_count`, log estructurado, **nunca** tumbar el lote completo. El job no relanza nunca: un reintento de la cola volvería a golpear una fuente que ya sabemos caída.
 - [x] Comando `php artisan news:scrape {--source=} {--spider=} {--sync}` para correr manualmente.
@@ -133,6 +149,7 @@ Migraciones en orden de dependencia:
 - [ ] Componentes Blade reutilizables: `<x-event-card>`, `<x-relevance-badge>`, `<x-source-pill>`, `<x-entity-list>`. *(borrador levantado, sujeto a revisión)*
 - [ ] Diseño escaneable: tarjeta = título, badge de relevancia, categoría, fuentes, resumen de 2–3 líneas, entidades, enlace al original. Responsive y con aviso "resumen generado por IA". *(borrador levantado, falta revisión visual en móvil y modo oscuro)*
 - [ ] Estados vacío / carga / error del pipeline asíncrono. *(vacío —portada y mercados— y fuente caída hechos; falta carga)*
+- [x] **Nada se filtra antes de su hora de publicación.** `/briefings/{id}` responde 404 si la edición todavía no se publicó, y un acontecimiento es público solo si alguna edición ya publicada lo incluye — criterio aplicado en el detalle, en las categorías, en los relacionados y en el contador de la barra de categorías. Sin esto, el contenido de la edición de la tarde era accesible por URL desde la mañana.
 - [x] Reemplazar `DemoContent` por consultas Eloquent con eager loading una vez existan los modelos. `Model::preventLazyLoading()` está activo fuera de producción, así que un eager load faltante rompe los tests en vez de esconderse como N+1.
 
 **Hecho cuando:** todas las rutas renderizan con datos sembrados **desde la base de datos** (no de demostración) y hay feature tests de smoke por cada una. ✔
@@ -150,14 +167,20 @@ Migraciones en orden de dependencia:
 - [x] `AnalyzeArticleJob` con `ThrottlesExceptions` / backoff; entidades y tags con `firstOrCreate` normalizado ("Codelco" y "CODELCO" son la misma fila).
 - [x] Binding del driver en `AppServiceProvider` según `config('newsscraper.ai.driver')` → deja lista la ruta para un `GeminiAnalyzer` si el profesor lo exige.
 
-**Criterio de fallo del análisis** (lo que distingue este job del resto): una respuesta mal formada es culpa del contenido y termina en `failed` tras un reintento; un fallo de transporte (Ollama caído, 503, timeout) no es culpa del artículo, se relanza para que la cola reintente con backoff y el artículo sigue `pending`.
+**Concurrencia del análisis.** `AnalyzeArticleJob` toma un *lease* sobre el artículo (`analysis_status = processing` + `analysis_run_id`) antes de llamar al modelo, y solo persiste si al cerrar sigue teniendo el lease. Un `processing` más viejo que `NEWS_AI_PROCESSING_STALE_AFTER` se considera abandonado y se puede retomar. Un artículo sin texto y una URL en HTTP se resuelven antes de gastar una llamada al LLM.
+
+> **Decisión abierta — política de reintentos.** Hoy cualquier fallo reintenta 4 veces con backoff y recién ahí queda `failed`. `CLAUDE.md §4` dice "se reintenta una vez y luego se marca failed". Para una respuesta mal formada, reintentar cuatro veces gasta cuatro llamadas al modelo por algo que probablemente vuelva a fallar igual; para Ollama caído, en cambio, cuatro reintentos están bien. Conviene decidir si se distingue el tipo de fallo o si se corrige la regla de `CLAUDE.md`.
 
 ### 4.2 Agrupación y priorización (Bruno + Vicente)
 - [x] `ClusterArticlesJob`: dentro de la ventana configurable, agrupa por (a) similitud de títulos normalizados, (b) entidades compartidas, (c) misma categoría.
 - [x] Crear o reutilizar `Event`; `relevance_score` = relevancia máxima del cluster + bonus por fuentes distintas.
 - [x] `GenerateBriefingJob`: toma los Events del período (desde el briefing anterior), ordena por `relevance_score`, corta en N (config, por defecto 7) y crea `Briefing` + pivote ordenado. Una edición vacía no se publica.
 
-**La identidad de un `Event` son sus artículos, no su título.** Si algún miembro del grupo ya pertenece a un acontecimiento, se reutiliza ese y el slug queda congelado. Sin esto, un artículo que llega tarde y cambia el título representativo abriría un acontecimiento duplicado, y dos hechos distintos con el mismo titular se fusionarían.
+**La identidad de un `Event` es `cluster_key`**, el hash del conjunto exacto de artículos que lo forman (ids + `url_hash`). El slug lleva ese hash como sufijo, así que dos hechos distintos con el mismo titular nunca colisionan, y reprocesar el mismo grupo no duplica nada.
+
+> **Decisión abierta — artículos que llegan tarde.** Solo se agrupan artículos con `event_id` nulo, y un grupo con un miembro nuevo tiene otro `cluster_key`. Consecuencia: si un medio publica su versión de una historia después de que el acontecimiento ya se creó, se abre un **segundo** acontecimiento sobre el mismo hecho en vez de sumarse al primero. Eso choca de frente con el punto 3 del alcance del MVP ("agrupación de artículos que hablan del mismo acontecimiento"), que es lo que justifica el producto. La alternativa —reutilizar el acontecimiento al que ya pertenece algún miembro— cuesta la inmutabilidad que hoy hace al job seguro ante concurrencia. Hay que elegir.
+
+> **Decisión abierta — ventana del briefing.** El período va desde la edición **anterior de la misma edición**, o sea 24 h: la ventana de la mañana y la de la tarde se solapan y un mismo acontecimiento puede salir en las dos del mismo día. Si la intención es que la edición de la tarde traiga solo lo nuevo desde la mañana, el corte debe ser contra el briefing anterior sin filtrar por edición.
 
 ### 4.3 Automatización
 - [x] Scheduler en `routes/console.php`: pipeline a las **07:00** (`morning`) y **18:00** (`evening`), zona `America/Santiago`, con `withoutOverlapping()` y `onOneServer()`. Los horarios salen de `BriefingEdition::scheduledHour()`, no escritos a mano.

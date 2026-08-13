@@ -30,6 +30,15 @@ final class SourceScraperResolver
             );
         }
 
+        // `spider_class` es un dato de la base y `--spider=` viene de la línea de
+        // comandos: ninguno de los dos puede terminar instanciando una clase
+        // arbitraria del proyecto. Solo entra lo que está en la allowlist.
+        if (! in_array($class, (array) config('newsscraper.scraping.spiders', []), true)) {
+            throw new UnresolvableSourceScraperException(
+                "El spider {$class} no está en la allowlist de config('newsscraper.scraping.spiders')."
+            );
+        }
+
         if (! class_exists($class)) {
             throw new UnresolvableSourceScraperException(
                 "El spider {$class} de la fuente {$source->name} no existe."

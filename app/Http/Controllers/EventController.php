@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\Response;
 
 class EventController extends Controller
 {
@@ -15,6 +16,14 @@ class EventController extends Controller
      */
     public function show(Event $event): View
     {
+        // Un acontecimiento es público solo si alguna edición ya publicada lo
+        // incluye: existir en la base no alcanza. Si no, el contenido de la
+        // edición de la tarde sería accesible por URL desde la mañana.
+        abort_unless(
+            Event::query()->whereKey($event->getKey())->published()->exists(),
+            Response::HTTP_NOT_FOUND
+        );
+
         $event->load([
             'articles' => fn ($query) => $query->with('source')->orderBy('published_at'),
             'entities',
@@ -23,6 +32,7 @@ class EventController extends Controller
         return view('events.show', [
             'event' => $event,
             'related' => Event::query()
+                ->published()
                 ->where('category', $event->category)
                 ->whereKeyNot($event->getKey())
                 ->mostRelevant()

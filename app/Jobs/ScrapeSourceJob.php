@@ -109,7 +109,11 @@ class ScrapeSourceJob implements ShouldQueue
                 'url' => $scraped->url,
                 'title' => $scraped->title,
                 'author' => $scraped->author,
-                'published_at' => $scraped->publishedAt,
+                // Varios listados no publican la fecha de cada nota. Sin
+                // `published_at` el artículo nunca entraría a la ventana del
+                // clustering, así que se usa la hora de recolección como
+                // aproximación: el listado muestra lo recién publicado.
+                'published_at' => $scraped->publishedAt ?? now(),
                 'excerpt' => $scraped->excerpt,
                 'content' => $scraped->content,
                 'scraped_at' => now(),

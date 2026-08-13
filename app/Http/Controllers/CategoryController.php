@@ -25,6 +25,7 @@ class CategoryController extends Controller
         return view('categories.show', [
             'category' => $newsCategory,
             'events' => Event::query()
+                ->published()
                 ->where('category', $newsCategory)
                 ->with(['articles.source', 'entities'])
                 ->mostRelevant()

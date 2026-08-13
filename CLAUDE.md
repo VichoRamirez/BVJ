@@ -9,7 +9,7 @@ The Laravel Boost guidelines are specifically curated by Laravel maintainers for
 
 This application is a Laravel application and its main Laravel ecosystems package & versions are below. You are an expert with them all. Ensure you abide by these specific packages & versions.
 
-- php - 8.4
+- php - 8.5
 - laravel/framework (LARAVEL) - v13
 - laravel/prompts (PROMPTS) - v0
 - laravel/boost (BOOST) - v2
@@ -195,7 +195,7 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 |---|---|
 | Backend | Laravel 13 + **PHP 8.4 o superior**. `composer.json` dice `^8.3`, pero es letra muerta: el `composer.lock` resuelto trae `symfony/*` 8.1 (`php >=8.4.1`) y `pestphp/pest ^5` (`php ^8.4`, PHPUnit 13). **En PHP 8.3 el `composer install` falla.** |
 | Base de datos | SQLite (`database/database.sqlite`) |
-| Scraping | ⚠️ **Sin resolver.** [Roach PHP](https://roach-php.dev/docs/introduction) era la decisión, pero `roach-php/laravel` no soporta Laravel 13. Alternativas y criterio de decisión en `PLAN.md §3.1` |
+| Scraping | **Resuelto: sin Roach** (no soporta Laravel 13). HTTP client de Laravel detrás de `App\Services\Scraping\SafeHttpFetcher`; RSS con `SimpleXMLElement`, HTML con `symfony/dom-crawler` + `symfony/css-selector` |
 | LLM | Ollama **local** vía HTTP en `127.0.0.1` o `[::1]` (`NEWS_OLLAMA_BASE_URL`, `NEWS_OLLAMA_MODEL`). `OllamaAnalyzer` rechaza cualquier otro host, así que **Ollama Cloud quedó fuera** — ver la discrepancia en §3 |
 | Datos de mercado | [scheb/yahoo-finance-api](https://github.com/scheb/yahoo-finance-api) (no oficial) |
 | Gráficos | SVG en línea con los tokens `--color-series-*` (`<x-sparkline>`). `laravel-charts` se descartó: última versión de 2023 y sin restricciones declaradas en su `composer.json` |
@@ -209,12 +209,12 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 ## 4. Reglas de trabajo
 
 ### Dependencias
-- `scheb/yahoo-finance-api` está aprobado y pendiente de instalar (verificado compatible: `php >=8.1`, sin dependencia de framework). Roach quedó bloqueado (ver `PLAN.md §3.1`) y laravel-charts se descartó. **Cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost).
+- Instaladas y en el lock: `symfony/dom-crawler` v8.1.1 y `symfony/css-selector` v8.1.0 (scraping HTML). `scheb/yahoo-finance-api` v5.2 está instalada pero **sin uso**: los datos de mercado salen del HTTP client de Laravel; queda por decidir si se saca. Roach quedó descartado y laravel-charts también. **Cada `composer require` / `npm install` nuevo se pregunta antes** (regla del bloque Boost), y al agregar uno hay que documentarlo en el README con versión, para qué sirve y el recordatorio de correr `composer install`.
 - No cambiar versiones de Laravel, PHP ni Pest.
 
 ### Código
 - **Identificadores en inglés** (modelos, métodos, columnas, rutas): `Article`, `BriefingEdition`, `relevance_level`. **Texto visible en español** (Blade, mensajes de validación, seeders de categorías). Los prompts al LLM van en español y piden respuesta en español.
-- Un scraper por fuente, cada uno como Spider de Roach en `app/Spiders/`.
+- Un scraper por fuente en `app/Spiders/`, implementando `App\Contracts\SourceScraper`. Ninguno hace requests por su cuenta: todos salen por `SafeHttpFetcher`, que centraliza allowlist de hosts, anti-SSRF, redirecciones revalidadas, robots.txt, retardo, timeout y tamaño máximo. Además hay allowlist de clases en `config('newsscraper.scraping.spiders')`.
 - Toda llamada externa (scraping, LLM, Yahoo) ocurre **dentro de un Job en cola**, nunca en un request HTTP. Los controllers solo leen de la base de datos.
 - Los Jobs deben ser **idempotentes**: reprocesar el mismo artículo no debe duplicar filas (usar `updateOrCreate` sobre un hash de URL).
 - Enums PHP para valores cerrados: `NewsCategory`, `RelevanceLevel`, `BriefingEdition`, `EntityType`.
@@ -226,7 +226,8 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 - La UI debe dejar claro que el resumen es generado por IA y siempre mostrar el **enlace a la publicación original**.
 
 ### Scraping responsable (requisito, no opcional)
-- Respetar `robots.txt` y aplicar retardo entre requests (Roach: `$delay`), con User-Agent identificable.
+- Respetar `robots.txt` y aplicar retardo entre requests, con User-Agent identificable. Lo implementa `SafeHttpFetcher`; ningún spider lo reimplementa.
+- Los listados mezclan periodismo con publirreportajes y contenido *branded*. Cada araña declara en `articlePathPattern()` qué rutas son notas: no se publica publicidad pagada como si fuera noticia.
 - **No almacenar ni republicar el texto completo con copyright.** Se guarda lo mínimo para analizar; lo que se publica es el resumen generado + metadatos + enlace.
 - Nunca eludir paywalls. Si una fuente bloquea o exige pago, se marca inactiva y se registra el fallo; no se buscan rodeos técnicos.
 - Los fallos de una fuente no pueden voltear el pipeline: cada fuente falla de forma aislada.
